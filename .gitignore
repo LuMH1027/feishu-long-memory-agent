@@ -53,3 +53,4 @@ yarn-error.log*
 docker-compose.override.yml
 开发文档/技术路线对比.md
 开发文档/应用场景与痛点分析.md
+开发文档/功能覆盖与扩展蓝图.md
