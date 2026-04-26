@@ -1,10 +1,37 @@
+[project]
+name = "feishu-long-memory-agent"
+version = "0.1.0"
+dependencies = [
+    "fastapi==0.109.2",
+    "uvicorn==0.27.1",
+    "sqlalchemy==2.0.25",
+    "chromadb==0.4.22",
+    "openai==1.12.0",
+    "langchain==0.1.9",
+    "lark-oapi==1.5.5",
+    "typer==0.9.0",
+    "pydantic==2.6.1",
+    "python-dotenv==1.0.1",
+    "pytest==7.4.4",
+    "python-multipart==0.0.6",
+    "requests==2.31.0",
+    "numpy==1.26.4",
+    "pandas==2.2.0"
+]
+
+[project.scripts]
+mem = "cli.main:app"
+
+[tool.setuptools.packages.find]
+include = ["cli*", "core*", "backend*", "db*", "feishu_bot*"]
+
 [tool.black]
 line-length = 120
-target-version = ['py310', 'py311']
+target-version = ["py310", "py311"]
 
 [tool.flake8]
 max-line-length = 120
-extend-ignore = ['E203', 'W503']
+extend-ignore = ["E203", "W503"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

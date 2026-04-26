@@ -1,136 +1,140 @@
-# 企业级记忆引擎 (Feishu Long-Memory Agent)
+# 🧠 企业级记忆引擎 (Enterprise Memory Engine)
 
-> 赋能团队与个人，告别信息孤岛，对抗集体失忆。一个能跨越CLI与飞书，沉淀、唤醒、复用知识的“外置大脑”。
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python Version">
+  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
+  <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg" alt="Status">
+</p>
+
+> **一个能跨越CLI与飞书，沉淀、唤醒、复用碎片化知识的“外置大脑”。**
 
 ---
 
-## 🎯 项目核心价值：我们解决了什么痛点？
+## 🤯 痛点：我们是否在“集体失忆”？
 
-在快节奏的企业协作中，有价值的信息和决策如散落的珍珠，被遗忘在海量的命令行历史、群聊和文档中，导致了巨大的效率损耗：
+在日常的开发与协作中，有价值的信息正在不断流失：
 
-1.  **开发者痛点**：反复输入冗长、易错的命令，在不同项目间切换时心智负担重。
-2.  **团队协作痛点**：群聊中的关键决策“阅后即焚”，信息检索如“大海捞针”，核心成员离职导致“知识断层”。
+- **对于开发者**: 那些复杂的、偶尔使用的、与特定项目相关的**命令行**，你是否需要反复查阅笔记或 `history`？
+- **对于团队**: 那些在**飞书群聊**中一闪而过的关键决策、技术方案、客户反馈，是否在一周后就无人记起，导致重复讨论和无效沟通？
 
-**本记忆引擎旨在通过一个统一的、智能的平台，捕获、理解、存储并主动推送这些碎片化信息，将“一次性”的对话转化为“可复用”的知识资产。**
+信息被隔离在不同的工具中，并随着时间被遗忘。我们正在为此付出高昂的效率成本。
 
-## ✨ 四大核心能力（覆盖赛题全部方向）
+## 💡 方案：构建一个记忆引擎
 
-我们的架构设计全面覆盖了赛题的四个方向，并通过一个可扩展的通用引擎实现。当前不同方向的实现状态如下：
+本项目旨在构建一个统一的记忆引擎，通过不同的“探针”捕获信息，经过智能处理后存入“记忆宫殿”，并在最需要的时刻被主动唤醒。
 
-| 方向 | 核心能力 | 状态 | 简介 |
-| :--- | :--- | :--- | :--- |
-| **A** | **CLI工作流记忆** | ✅ **核心已实现** | 记住并推荐高频、复杂的CLI命令，支持上下文感知。 |
-| **B** | **飞书项目决策记忆** | 🟡 **框架已就绪** | 自动从群聊中捕获决策，并在需要时主动推送“历史卡片”，避免重复讨论。 |
-| **C** | **个人工作习惯记忆** | 🟠 **架构已预留** | 通过观察用户行为，学习其个人偏好，并在适当时机提供个性化建议。 |
-| **D** | **团队知识遗忘预警** | 🟠 **架构已预留** | 基于遗忘曲线，对长期未被“复习”的关键知识在群聊中进行主动提醒。 |
+```mermaid
+graph LR
+    subgraph A[信息捕获层]
+        direction LR
+        A1(CLI客户端) --> B
+        A2(飞书机器人) --> B
+    end
+    subgraph B[记忆引擎核心]
+        direction TB
+        B1{核心API} --> B2[提取/检索/更新]
+        B2 <--> B3[(混合数据库)]
+    end
+    subgraph C[知识应用层]
+        direction LR
+        B --> C1(CLI智能推荐)
+        B --> C2(飞书主动提醒)
+    end
+```
 
-> **架构亮点**：我们通过通用的数据模型（如`Memory`表中的`type`, `user_id`, `hit_count`, `expire_at`等字段）为方向C和D的实现奠定了坚实基础，无需重构即可平滑扩展。
+## 🚀 快速上手 (Quick Start)
 
-## 🚀 快速开始
+只需3个步骤，即可在本地运行并使用记忆引擎。
 
 ### 1. 环境准备
 
-*   Python 3.10 ~ 3.11
-*   Git
-*   [可选] 拥有管理员权限的飞书企业版账号（用于飞书机器人功能）
-*   [可选] OpenAI API Key（用于AI信息提取）
+- Python 3.10+ & Pip
+- Git
 
 ### 2. 安装与配置
 
 ```bash
-# 1. 克隆项目
+# 克隆项目到本地
 git clone <your-repo-url>
 cd feishu-long-memory-agent
 
-# 2. 创建并激活虚拟环境
-python -m venv venv
-# Windows: .\venv\Scripts\activate | macOS/Linux: source venv/bin/activate
+# 安装项目本身及所有依赖
+# '-e' 表示可编辑模式，你的代码修改会立刻生效
+pip install -e .
 
-# 3. 安装依赖
-pip install -r requirements.txt
-
-# 4. 配置环境变量 (关键！)
-cp .env.example .env
-# 编辑 .env 文件，至少填入你的 OPENAI_API_KEY
-# 如需使用飞书功能，请填入飞书机器人的相关凭证
+# [重要] 为全局 aem 命令配置后端地址（首次使用需要）
+mem configure
+# > 根据提示输入后端API地址，默认为 http://localhost:8000/api/v1
 ```
 
-### 3. 初始化与启动
+### 3. 启动服务
 
 ```bash
-# 5. 初始化数据库（首次运行需要）
+# (可选) 如果你修改了.env.example, 复制一份
+# cp .env.example .env
+
+# 初始化数据库（首次运行需要）
 python init_db.py
 
-# 6. 启动后端服务
+# 启动后端API服务
 uvicorn backend.main:app --reload --port 8000
 ```
 
-服务启动后，可访问 `http://localhost:8000/docs` 查看API文档。
+服务启动后，你就可以在**任意终端**使用 `mem` 命令，或在飞书中与机器人互动了。
 
-## 💡 使用示例
+## � 使用指南 (Usage)
 
-### CLI 端：开发者的“第二大脑”
+### CLI端：开发者的“第二大脑”
+
+`mem` 命令现在是你的全局效率工具。
 
 ```bash
-# 注入一条可能会复用的命令
-python -m cli.main memorize "npm run build && docker build -t my-app:latest ."
+# 场景1: 记住一个复杂的命令，并打上标签
+mem memorize "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2" --type "docker启动命令"
 
-# 当忘记时，通过模糊搜索找回
-python -m cli.main search "构建镜像"
-# > 输出：npm run build && docker build -t my-app:latest .
+# 场景2: 当忘记时，通过自然语言模糊搜索
+mem search "启动webapp容器"
+
+# 场景3: 查看最近记住的所有内容
+mem list
+
+# 场景4: 清空所有记忆
+mem clear
 ```
 
-### 飞书端：团队的“记忆账本”
+### 飞书端：团队的“决策账本”
 
 1.  **储存决策**
-    *   **你** (在群聊中): `@记忆机器人 记住，alpha版的发布日期最终定在5月10日。`
-    *   **机器人** (自动回复): `好的，我记住了：alpha版发布日期 -> 5月10日。`
+    - **你** (在群聊中): `@记忆机器人 记住，alpha版的发布日期最终定在5月10日。`
+    - **机器人** (自动回复): `好的，我记住了：alpha版发布日期 -> 5月10日。`
 
 2.  **自动唤醒**
-    *   **同事** (几天后在群聊中): `我们项目啥时候发版来着？`
-    *   **机器人** (主动推送卡片): 
+    - **同事** (几天后在群聊中): `我们项目啥时候发版来着？`
+    - **机器人** (主动推送卡片): 
         > **历史决策提醒**
         > **主题**: alpha版发布日期
         > **结论**: 5月10日
         > **记录时间**: 2024-05-01
 
-## 🛠️ 技术架构与实现
+## 🛠️ 技术内幕 (Under the Hood)
 
-我们采用**分层解耦**的架构，确保系统的可维护性和扩展性。
+- **后端**: FastAPI, Uvicorn
+- **数据存储**: SQLAlchemy, ChromaDB (向量库), SQLite/PostgreSQL
+- **AI能力**: LangChain, OpenAI API
+- **CLI**: Typer
+- **飞书集成**: 官方 Python SDK
 
-```mermaid
-graph TD
-    subgraph 接入层 (Adapters)
-        A[CLI 客户端] -- 同步HTTP --> GW
-        B[飞书机器人] -- 异步Webhook --> GW
-    end
+项目采用分层解耦架构，核心业务逻辑与接入端无关，具备高度可扩展性，为未来接入更多记忆场景（如个人偏好学习、知识遗忘预警）奠定了坚实基础。
 
-    subgraph 核心服务 (Core Service)
-        GW[API网关 FastAPI]
-        GW --> Engine[记忆引擎 Core]
-        Engine <--> DBs[(混合数据库)]
-    end
+## 🤝 贡献与开发
 
-    subgraph 数据层 (Data Layer)
-        DBs -- 结构化数据 --> RDB[关系型数据库 SQLite/PG]
-        DBs -- 语义向量 --> VDB[向量数据库 ChromaDB]
-    end
-```
+我们欢迎任何形式的贡献！无论是功能建议、Bug修复还是文档改进。
 
-*   **接入层**: 负责与外部（CLI、飞书）交互，将不同形式的输入标准化后调用核心服务。
-*   **核心服务**: 包含所有业务逻辑，如记忆的提取、存储、检索、更新、遗忘等，与具体接入方无关。
-*   **数据层**: 采用关系型+向量的混合存储模式。关系库存储精确的元数据，向量库存储语义信息，实现高效的混合检索。
-
-## 🗺️ 项目路线图
-
-- [x] **阶段一：完成核心框架与CLI记忆功能 (方向A)**
-- [ ] **阶段二：完善飞书决策捕获与主动提醒 (方向B)**
-- [ ] **阶段三：开发基于遗忘曲线的团队知识复习功能 (方向D)**
-- [ ] **阶段四：探索基于用户行为的个人偏好学习 (方向C)**
-
-## 🤝 如何贡献
-
-我们欢迎任何形式的贡献！请参考 `CONTRIBUTING.md` (待创建)。
+1.  Fork 本仓库
+2.  创建你的特性分支 (`git checkout -b feature/AmazingFeature`)
+3.  提交你的修改 (`git commit -m 'Add some AmazingFeature'`)
+4.  推送到分支 (`git push origin feature/AmazingFeature`)
+5.  发起一个 Pull Request
 
 ## 📄 许可证
 

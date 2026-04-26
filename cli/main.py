@@ -3,16 +3,52 @@ from typing import Optional
 import os
 import requests
 from dotenv import load_dotenv
+from pathlib import Path
+import configparser
 
-load_dotenv()
+# --- 配置管理 ---
+CONFIG_DIR = Path.home() / ".mem_agent"
+CONFIG_FILE = CONFIG_DIR / "config.ini"
 
+def get_api_base() -> str:
+    """获取API基础地址，优先从全局配置读取，其次是.env文件"""
+    # 1. 尝试从全局配置读取
+    if CONFIG_FILE.exists():
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        if "default" in config and "api_base" in config["default"]:
+            return config["default"]["api_base"]
+    
+    # 2. 兼容本地开发，从.env文件读取
+    load_dotenv()
+    return os.getenv("API_BASE", "http://localhost:8000/api/v1")
+
+API_BASE = get_api_base()
+
+# --- Typer 应用定义 ---
 app = typer.Typer(
     name="mem",
     help="企业级记忆引擎CLI客户端",
     add_completion=False
 )
 
-API_BASE = os.getenv("API_BASE", "http://localhost:8000/api/v1")
+# --- 命令实现 ---
+
+@app.command()
+def configure():
+    """配置CLI工具，如API服务器地址"""
+    api_base = typer.prompt("请输入记忆引擎API服务器地址", default=API_BASE)
+    
+    # 创建配置目录
+    CONFIG_DIR.mkdir(exist_ok=True)
+    
+    # 写入配置
+    config = configparser.ConfigParser()
+    config["default"] = {"api_base": api_base}
+    with open(CONFIG_FILE, "w") as configfile:
+        config.write(configfile)
+        
+    typer.echo(f"✅ 配置已保存到 {CONFIG_FILE}")
 
 @app.command()
 def memorize(content: str, type: str = "user_preference"):
