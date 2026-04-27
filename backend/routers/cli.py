@@ -25,8 +25,8 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
     
     if existing:
         # 更新使用次数
-        existing["count"] += request.count
-        existing["last_used_at"] = datetime.now().isoformat()
+        existing["metadata"]["count"] += request.count
+        existing["metadata"]["last_used_at"] = datetime.now().isoformat()
     else:
         # 创建新记忆
         new_command = {
