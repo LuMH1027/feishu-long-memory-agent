@@ -44,12 +44,14 @@ class VectorClient:
         
         # 过滤低于阈值的结果
         filtered = []
-        for mem_id, distance in zip(results["ids"][0], results["distances"][0]):
+        metadatas = results.get("metadatas", [[]])[0] or []
+        for index, (mem_id, distance) in enumerate(zip(results["ids"][0], results["distances"][0])):
             similarity = 1 - distance
             if similarity >= threshold:
                 filtered.append({
                     "id": mem_id,
-                    "similarity": similarity
+                    "similarity": similarity,
+                    "metadata": metadatas[index] if index < len(metadatas) else {}
                 })
         
         return filtered

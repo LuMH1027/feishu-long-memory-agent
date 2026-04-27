@@ -142,8 +142,8 @@ def test_delete_memory_is_noop_when_missing(monkeypatch):
 
 
 def test_search_memories_uses_vector_order_and_increments_hit_count(monkeypatch):
-    memory_a = SimpleNamespace(id="a", hit_count=0)
-    memory_b = SimpleNamespace(id="b", hit_count=2)
+    memory_a = SimpleNamespace(id="a", type="user_preference", hit_count=0)
+    memory_b = SimpleNamespace(id="b", type="user_preference", hit_count=2)
     db = FakeDB(query_result=[memory_a, memory_b])
     vector_search_calls = []
 
@@ -182,6 +182,86 @@ def test_search_memories_reads_defaults_from_environment(monkeypatch):
     assert calls == [{"query_embedding": [1.0], "top_k": 9, "threshold": 0.42}]
 
 
+def test_calculate_cli_relevance_score_combines_frequency_recency_and_prefix():
+    memory = SimpleNamespace(
+        content="git status --short",
+        similarity_score=0.4,
+        cli_metadata={"count": 10, "last_used_at": "2000-01-01T00:00:00"},
+    )
+
+    assert retriever.calculate_cli_relevance_score("git", memory) == pytest.approx(0.9)
+
+
+def test_calculate_cli_relevance_score_ignores_invalid_metadata_values():
+    memory = SimpleNamespace(
+        content="docker compose up",
+        similarity_score=0.5,
+        cli_metadata={"count": "many", "last_used_at": "not-a-date"},
+    )
+
+    assert retriever.calculate_cli_relevance_score("npm", memory) == 0.5
+
+
+def test_search_memories_cli_prefix_match_beats_higher_semantic_match(monkeypatch):
+    prefix_match = SimpleNamespace(id="prefix", type="cli_command", content="git status", hit_count=0)
+    semantic_match = SimpleNamespace(id="semantic", type="cli_command", content="show git status", hit_count=0)
+    db = FakeDB(query_result=[prefix_match, semantic_match])
+
+    monkeypatch.setattr(retriever, "get_embedding", lambda query: [0.1])
+    monkeypatch.setattr(
+        retriever,
+        "vector_client",
+        SimpleNamespace(
+            search_memories=lambda **kwargs: [
+                {"id": "semantic", "similarity": 0.99, "metadata": {"count": 20}},
+                {"id": "prefix", "similarity": 0.4, "metadata": {"count": 0}},
+            ]
+        ),
+    )
+
+    assert retriever.search_memories(db, "git", top_k=2, threshold=0.1) == [prefix_match, semantic_match]
+
+
+def test_search_memories_cli_frequency_breaks_ties(monkeypatch):
+    low_frequency = SimpleNamespace(id="low", type="cli_command", content="echo low frequency", hit_count=0)
+    high_frequency = SimpleNamespace(id="high", type="cli_command", content="echo high frequency", hit_count=0)
+    db = FakeDB(query_result=[low_frequency, high_frequency])
+
+    monkeypatch.setattr(retriever, "get_embedding", lambda query: [0.1])
+    monkeypatch.setattr(
+        retriever,
+        "vector_client",
+        SimpleNamespace(
+            search_memories=lambda **kwargs: [
+                {"id": "low", "similarity": 0.5, "metadata": {"count": 1}},
+                {"id": "high", "similarity": 0.5, "metadata": {"count": 8}},
+            ]
+        ),
+    )
+
+    assert retriever.search_memories(db, "echo", top_k=2, threshold=0.1) == [high_frequency, low_frequency]
+
+
+def test_search_memories_cli_recency_breaks_ties(monkeypatch):
+    old_command = SimpleNamespace(id="old", type="cli_command", content="npm test old", hit_count=0)
+    recent_command = SimpleNamespace(id="recent", type="cli_command", content="npm test recent", hit_count=0)
+    db = FakeDB(query_result=[old_command, recent_command])
+
+    monkeypatch.setattr(retriever, "get_embedding", lambda query: [0.1])
+    monkeypatch.setattr(
+        retriever,
+        "vector_client",
+        SimpleNamespace(
+            search_memories=lambda **kwargs: [
+                {"id": "old", "similarity": 0.5, "metadata": {"count": 1, "last_used_at": "2000-01-01T00:00:00"}},
+                {"id": "recent", "similarity": 0.5, "metadata": {"count": 1, "last_used_at": "2999-01-01T00:00:00"}},
+            ]
+        ),
+    )
+
+    assert retriever.search_memories(db, "npm", top_k=2, threshold=0.1) == [recent_command, old_command]
+
+
 def test_vector_client_add_memory_delegates_to_collection():
     client = object.__new__(VectorClient)
     calls = []
@@ -202,10 +282,16 @@ def test_vector_client_add_memory_delegates_to_collection():
 def test_vector_client_search_filters_by_similarity_threshold():
     client = object.__new__(VectorClient)
     client.collection = SimpleNamespace(
-        query=lambda **kwargs: {"ids": [["keep", "drop"]], "distances": [[0.2, 0.5]]}
+        query=lambda **kwargs: {
+            "ids": [["keep", "drop"]],
+            "distances": [[0.2, 0.5]],
+            "metadatas": [[{"count": 2}, {"count": 10}]],
+        }
     )
 
-    assert client.search_memories([0.1], top_k=2, threshold=0.7) == [{"id": "keep", "similarity": 0.8}]
+    assert client.search_memories([0.1], top_k=2, threshold=0.7) == [
+        {"id": "keep", "similarity": 0.8, "metadata": {"count": 2}}
+    ]
 
 
 def test_vector_client_search_returns_empty_when_collection_has_no_ids():
