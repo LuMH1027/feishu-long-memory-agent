@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
-from backend.routers import cli
+from backend.dependencies import init_database_schema
+from backend.routers import cli, memory
 
 load_dotenv()
 
@@ -12,6 +13,13 @@ app = FastAPI(
 
 # 注册路由
 app.include_router(cli.cli_router, prefix="/api/v1", tags=["CLI端对接"])
+app.include_router(memory.router, prefix="/api/v1/memory", tags=["记忆管理"])
+
+
+@app.on_event("startup")
+def startup_event():
+    init_database_schema()
+
 
 @app.get("/health")
 def health_check():

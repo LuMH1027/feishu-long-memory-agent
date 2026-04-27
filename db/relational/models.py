@@ -10,6 +10,8 @@ class Memory(Base):
     content = Column(Text, nullable=False)
     type = Column(String(20), nullable=False, index=True)  # cli_command / project_decision / user_preference
     source = Column(String(20), nullable=False, index=True)  # cli / feishu_group / feishu_doc
+    description = Column(Text)
+    memory_metadata = Column(Text)
     user_id = Column(String(64), index=True)
     team_id = Column(String(64), index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

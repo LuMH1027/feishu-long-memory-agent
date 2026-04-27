@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """初始化数据库脚本"""
 from backend.dependencies import engine, Base
+from backend.dependencies import init_database_schema
 from db.relational.models import Memory, DecisionMemory
 from db.vector.client import vector_client
 
 def init_relational_db():
     """初始化关系型数据库"""
     print("正在初始化关系型数据库...")
-    Base.metadata.create_all(bind=engine)
+    init_database_schema()
     print("✅ 关系型数据库表创建完成")
 
 def init_vector_db():

@@ -49,6 +49,10 @@ def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
 def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     """Unify memory and CLI-command result shapes for CLI rendering."""
     metadata = result.get("metadata") or {}
+    if "count" in result:
+        metadata = {**metadata, "count": result.get("count")}
+    if "last_used" in result:
+        metadata = {**metadata, "last_used_at": result.get("last_used")}
     content = result.get("content") or result.get("command") or ""
     return {
         "content": content,
@@ -63,11 +67,15 @@ def _search_memories(query: str, limit: int, memory_type: Optional[str] = None) 
     if memory_type:
         params["type"] = memory_type
 
+    results = []
     try:
         response = _request("GET", "/memory/search", params=params)
         response.raise_for_status()
         results = response.json()
     except requests.RequestException:
+        results = []
+
+    if not results:
         response = _request("POST", "/memory/retrieve", json={"query": query, "top_k": limit})
         response.raise_for_status()
         results = response.json()
@@ -75,7 +83,24 @@ def _search_memories(query: str, limit: int, memory_type: Optional[str] = None) 
     normalized = [_normalize_result(item) for item in results]
     if memory_type:
         normalized = [item for item in normalized if item.get("type") == memory_type]
-    return normalized[:limit]
+    if normalized:
+        return normalized[:limit]
+
+    try:
+        response = _request(
+            "POST",
+            "/cli/command/suggest",
+            json={"partial_command": query, "shell": os.getenv("SHELL", "powershell")},
+        )
+        response.raise_for_status()
+        suggestions = response.json().get("suggestions", [])
+    except requests.RequestException:
+        suggestions = []
+
+    command_results = [_normalize_result({**item, "type": "cli_command"}) for item in suggestions]
+    if memory_type:
+        command_results = [item for item in command_results if item.get("type") == memory_type]
+    return command_results[:limit]
 
 # --- 命令实现 ---
 
@@ -114,14 +139,26 @@ def memorize(content: str, type: str = "user_preference"):
 def list(limit: int = 10):
     """查看历史记忆列表"""
     try:
-        response = _request("GET", "/memory/list", params={"limit": limit})
-        response.raise_for_status()
-        memories = response.json()
+        memories = []
+        try:
+            response = _request("GET", "/memory/list", params={"limit": limit})
+            response.raise_for_status()
+            memories.extend(response.json())
+        except requests.RequestException:
+            pass
+
+        try:
+            response = _request("GET", "/cli/command/list", params={"limit": limit})
+            response.raise_for_status()
+            memories.extend(_normalize_result(item) for item in response.json())
+        except requests.RequestException:
+            pass
+
         if not memories:
             typer.echo("暂无记忆")
             return
         for mem in memories:
-            typer.echo(f"[{mem['id']}] [{mem['type']}] {mem['content'][:50]}...")
+            typer.echo(f"[{mem.get('id', '-')}] [{mem.get('type', 'unknown')}] {mem.get('content', '')[:50]}...")
     except Exception as e:
         typer.echo(f"❌ 获取失败: {str(e)}", err=True)
 
