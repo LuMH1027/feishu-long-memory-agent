@@ -62,7 +62,7 @@ cd feishu-long-memory-agent
 # '-e' 表示可编辑模式，你的代码修改会立刻生效
 pip install -e .
 
-# [重要] 为全局 aem 命令配置后端地址（首次使用需要）
+# [重要] 为全局 mem 命令配置后端地址（首次使用需要）
 mem configure
 # > 根据提示输入后端API地址，默认为 http://localhost:8000/api/v1
 ```

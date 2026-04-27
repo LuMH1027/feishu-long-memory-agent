@@ -328,12 +328,11 @@ def test_get_embedding_returns_first_embedding(monkeypatch):
 
 def test_init_relational_db_creates_tables(monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(init_db.Base.metadata, "create_all", lambda bind: calls.append(bind))
-    monkeypatch.setattr(init_db, "engine", "fake-engine")
+    monkeypatch.setattr(init_db, "init_database_schema", lambda: calls.append("init"))
 
     init_db.init_relational_db()
 
-    assert calls == ["fake-engine"]
+    assert calls == ["init"]
     assert "关系型数据库表创建完成" in capsys.readouterr().out
 
 

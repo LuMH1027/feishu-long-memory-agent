@@ -61,6 +61,27 @@ def test_suggest_command_filters_case_insensitively_and_sorts_by_count():
     assert [item["count"] for item in response["suggestions"]] == [5, 2]
 
 
+def test_suggest_command_matches_all_tokens_when_not_contiguous():
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(command="docker ps -a --filter status=exited", count=3, shell="powershell")
+        )
+    )
+
+    response = asyncio.run(cli.suggest_command(cli.CommandSuggestRequest(partial_command="docker exited")))
+
+    assert [item["command"] for item in response["suggestions"]] == ["docker ps -a --filter status=exited"]
+
+
+def test_list_commands_returns_recent_records():
+    asyncio.run(cli.record_command(cli.CommandRecordRequest(command="first", count=1, shell="bash")))
+    asyncio.run(cli.record_command(cli.CommandRecordRequest(command="second", count=1, shell="bash")))
+
+    response = asyncio.run(cli.list_commands(limit=1))
+
+    assert [item["command"] for item in response] == ["second"]
+
+
 def test_suggest_command_returns_empty_list_when_no_match():
     response = asyncio.run(cli.suggest_command(cli.CommandSuggestRequest(partial_command="docker")))
 

@@ -2,73 +2,98 @@ import asyncio
 import importlib
 import sys
 import types
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-
-sys.modules.setdefault(
-    "chromadb",
-    types.SimpleNamespace(
-        PersistentClient=lambda path: SimpleNamespace(
-            get_or_create_collection=lambda **kwargs: SimpleNamespace(
-                add=lambda **add_kwargs: None,
-                query=lambda **query_kwargs: {"ids": [[]], "distances": [[]]},
-                delete=lambda **delete_kwargs: None,
-            )
-        )
-    ),
-)
-sys.modules.setdefault(
-    "openai",
-    types.SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(embeddings=SimpleNamespace(create=lambda **kw: None))),
-)
 
 from backend.routers import memory
 from backend.schemas.memory import MemoryCreate, MemoryRetrieveRequest
 
 
-def test_memory_extract_delegates_to_storage(monkeypatch):
-    saved = SimpleNamespace(id="mem-1")
-    calls = []
-    monkeypatch.setattr(
-        memory.storage,
-        "save_memory",
-        lambda db, memory_data: calls.append((db, memory_data)) or saved,
+def setup_function():
+    memory.temp_memory_storage.clear()
+
+
+def test_memory_extract_stores_memory():
+    result = memory.extract_and_store_memory(MemoryCreate(content="hello", type="user_preference", source="cli"))
+
+    assert result["content"] == "hello"
+    assert result["type"] == "user_preference"
+    assert result["source"] == "cli"
+    assert result in memory.temp_memory_storage
+
+
+def test_memory_store_preserves_description_and_metadata():
+    result = memory.store_memory(
+        memory.MemoryStoreRequest(
+            content='{"name": "docker清理"}',
+            type="cli_workflow",
+            description="工作流：docker清理",
+            metadata={"name": "docker清理", "steps": ["docker system prune -f"]},
+        )
     )
-    memory_data = MemoryCreate(content="hello", type="user_preference", source="cli")
 
-    assert memory.extract_and_store_memory(memory_data, db="db") is saved
-    assert calls == [("db", memory_data)]
+    assert result["description"] == "工作流：docker清理"
+    assert result["metadata"]["steps"] == ["docker system prune -f"]
 
 
-def test_memory_retrieve_delegates_to_retriever(monkeypatch):
-    memories = [SimpleNamespace(id="mem-1")]
-    calls = []
-    monkeypatch.setattr(
-        memory.retriever,
-        "search_memories",
-        lambda db, query, top_k, threshold: calls.append((db, query, top_k, threshold)) or memories,
+def test_memory_search_matches_all_query_tokens_and_filters_type():
+    memory.store_memory(
+        memory.MemoryStoreRequest(content="docker ps -a --filter status=exited", type="cli_command", metadata={"count": 3})
     )
-    request = MemoryRetrieveRequest(query="deploy", top_k=3, threshold=0.5)
+    memory.store_memory(memory.MemoryStoreRequest(content="docker images", type="cli_command", metadata={"count": 10}))
+    memory.store_memory(memory.MemoryStoreRequest(content="docker清理", type="cli_workflow"))
 
-    assert memory.retrieve_memories(request, db="db") == memories
-    assert calls == [("db", "deploy", 3, 0.5)]
+    results = memory.search_memories(query="docker exited", limit=5, type="cli_command")
 
-
-def test_memory_get_delegates_to_storage(monkeypatch):
-    found = SimpleNamespace(id="mem-1")
-    monkeypatch.setattr(memory.storage, "get_memory_by_id", lambda db, memory_id: found)
-
-    assert memory.get_memory("mem-1", db="db") is found
+    assert [item["content"] for item in results] == ["docker ps -a --filter status=exited"]
+    assert results[0]["hit_count"] == 1
 
 
-def test_memory_delete_delegates_to_storage(monkeypatch):
-    deleted = []
-    monkeypatch.setattr(memory.storage, "delete_memory", lambda db, memory_id: deleted.append((db, memory_id)))
+def test_memory_search_matches_chinese_intent_with_command_terms():
+    memory.store_memory(
+        memory.MemoryStoreRequest(
+            content="docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2",
+            type="docker启动命令",
+        )
+    )
 
-    assert memory.delete_memory("mem-1", db="db") == {"status": "ok", "message": "记忆删除成功"}
-    assert deleted == [("db", "mem-1")]
+    results = memory.search_memories(query="启动webapp容器", limit=5)
+
+    assert [item["content"] for item in results] == [
+        "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2"
+    ]
+
+
+def test_memory_retrieve_uses_search_logic():
+    memory.store_memory(memory.MemoryStoreRequest(content="git status --short", type="cli_command"))
+
+    results = memory.retrieve_memories(MemoryRetrieveRequest(query="git short", top_k=1))
+
+    assert [item["content"] for item in results] == ["git status --short"]
+
+
+def test_memory_list_returns_recent_items():
+    first = memory.store_memory(memory.MemoryStoreRequest(content="first", type="note"))
+    second = memory.store_memory(memory.MemoryStoreRequest(content="second", type="note"))
+
+    assert memory.list_memories(limit=1) == [second]
+    assert memory.list_memories(limit=2) == [first, second]
+
+
+def test_memory_get_and_delete_by_id():
+    result = memory.store_memory(memory.MemoryStoreRequest(content="delete me", type="note"))
+
+    assert memory.get_memory(result["id"]) == result
+    assert memory.delete_memory(result["id"]) == {"status": "ok", "message": "记忆删除成功"}
+    assert memory.temp_memory_storage == []
+
+
+def test_memory_get_missing_raises_404():
+    with pytest.raises(HTTPException) as exc_info:
+        memory.get_memory("missing")
+
+    assert exc_info.value.status_code == 404
 
 
 class FakeRequest:

@@ -4,8 +4,8 @@ sqlalchemy==2.0.25
 chromadb==0.4.22
 openai==1.12.0
 langchain==0.1.9
-feishu-python-sdk==2.1.2
-typer==0.9.0
+lark-oapi==1.5.5
+typer==0.12.3
 pyperclip==1.8.2
 pydantic==2.6.1
 python-dotenv==1.0.1

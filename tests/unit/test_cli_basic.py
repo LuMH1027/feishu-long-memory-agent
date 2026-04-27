@@ -186,6 +186,26 @@ def test_search_memories_falls_back_to_retrieve_endpoint(monkeypatch):
     assert results[0]["content"] == "echo fallback"
 
 
+def test_search_memories_tries_retrieve_when_get_search_is_empty(monkeypatch):
+    calls = []
+
+    def fake_request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if path == "/memory/search":
+            return FakeResponse([])
+        return FakeResponse([{"content": "docker run --name webapp", "type": "docker启动命令"}])
+
+    monkeypatch.setattr(cli_main, "_request", fake_request)
+
+    results = cli_main._search_memories("启动webapp容器", 5)
+
+    assert calls == [
+        ("GET", "/memory/search", {"params": {"query": "启动webapp容器", "limit": 5}}),
+        ("POST", "/memory/retrieve", {"json": {"query": "启动webapp容器", "top_k": 5}}),
+    ]
+    assert results[0]["content"] == "docker run --name webapp"
+
+
 def test_clear_requires_confirmation():
     result = runner.invoke(cli_main.app, ["clear"], input="n\n")
 
