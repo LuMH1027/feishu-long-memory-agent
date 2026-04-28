@@ -51,6 +51,23 @@ def _current_directory() -> str:
     return str(Path.cwd())
 
 
+def _record_command_usage(command: str, exit_code: Optional[int] = None) -> None:
+    """Best-effort feedback loop for executed commands."""
+    payload: dict[str, Any] = {
+        "command": command,
+        "count": 1,
+        "shell": os.getenv("SHELL", "powershell"),
+        "directory": _current_directory(),
+    }
+    if exit_code is not None:
+        payload["exit_code"] = exit_code
+    try:
+        response = _request("POST", "/cli/command/record", json=payload)
+        response.raise_for_status()
+    except requests.RequestException:
+        pass
+
+
 def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     """Unify memory and CLI-command result shapes for CLI rendering."""
     metadata = result.get("metadata") or {}
@@ -196,7 +213,8 @@ def search(
         if execute:
             cmd = results[0]["content"]
             typer.echo(f"🚀 执行命令：{cmd}")
-            subprocess.run(cmd, shell=True)
+            completed = subprocess.run(cmd, shell=True)
+            _record_command_usage(cmd, getattr(completed, "returncode", None))
             return
 
         if copy:
@@ -225,7 +243,8 @@ def search(
         cmd = results[selected - 1]["content"]
         action = typer.prompt("请选择操作：1=执行 2=复制", type=int, default=1)
         if action == 1:
-            subprocess.run(cmd, shell=True)
+            completed = subprocess.run(cmd, shell=True)
+            _record_command_usage(cmd, getattr(completed, "returncode", None))
         elif action == 2:
             pyperclip.copy(cmd)
             typer.echo("✅ 已复制到剪贴板")
@@ -370,7 +389,8 @@ def run_workflow(name: str = typer.Argument(..., help="工作流名称")):
             typer.echo(f"\n步骤 {i}/{len(steps)}: {step}")
             confirm = typer.confirm("是否执行？", default=True)
             if confirm:
-                subprocess.run(step, shell=True)
+                completed = subprocess.run(step, shell=True)
+                _record_command_usage(step, getattr(completed, "returncode", None))
             else:
                 typer.echo("⏭️  跳过该步骤")
     except Exception as e:

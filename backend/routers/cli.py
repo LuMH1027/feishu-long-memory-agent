@@ -35,8 +35,7 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
             metadata["shell"] = request.shell
             _track_directory(metadata, request.directory, request.count)
             _attach_command_pattern(metadata, request.command)
-            if request.exit_code is not None:
-                metadata["exit_code"] = request.exit_code
+            _track_exit_code(metadata, request.exit_code)
             existing.description = existing.description or f"{request.shell}命令"
             existing.memory_metadata = _metadata_to_json(metadata)
             existing.updated_at = datetime.now()
@@ -50,8 +49,7 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
             }
             _track_directory(metadata, request.directory, request.count)
             _attach_command_pattern(metadata, request.command)
-            if request.exit_code is not None:
-                metadata["exit_code"] = request.exit_code
+            _track_exit_code(metadata, request.exit_code)
             db.add(
                 Memory(
                     id=uuid.uuid4().hex[:16],
@@ -74,6 +72,7 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
         existing["metadata"]["last_used_at"] = datetime.now().isoformat()
         _track_directory(existing["metadata"], request.directory, request.count)
         _attach_command_pattern(existing["metadata"], request.command)
+        _track_exit_code(existing["metadata"], request.exit_code)
     else:
         # 创建新记忆
         new_command = {
@@ -91,6 +90,7 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
                 "last_used_at": datetime.now().isoformat()
             }
         }
+        _track_exit_code(new_command["metadata"], request.exit_code)
         temp_command_storage.append(new_command)
     
     return {"status": "success"}
@@ -169,6 +169,27 @@ def _track_directory(metadata: dict, directory: Optional[str], count: int) -> No
     metadata["directories"] = directories
 
 
+def _track_exit_code(metadata: dict, exit_code: Optional[int]) -> None:
+    if exit_code is None:
+        return
+    metadata["exit_code"] = exit_code
+    metadata["last_exit_code"] = exit_code
+    if exit_code == 0:
+        metadata["success_count"] = int(metadata.get("success_count", 0) or 0) + 1
+    else:
+        metadata["failure_count"] = int(metadata.get("failure_count", 0) or 0) + 1
+        metadata["last_failed_at"] = datetime.now().isoformat()
+
+
+def _success_score(metadata: dict) -> float:
+    success_count = int(metadata.get("success_count", 0) or 0)
+    failure_count = int(metadata.get("failure_count", 0) or 0)
+    total = success_count + failure_count
+    if total == 0:
+        return 0.0
+    return (success_count / total) * 0.2
+
+
 def _attach_command_pattern(metadata: dict, command: str) -> None:
     metadata["command_pattern"] = parse_command(command)
 
@@ -204,6 +225,7 @@ def _suggestion_sort_key(memory: Memory, request: CommandSuggestRequest):
     return (
         1 if memory.content.lower().startswith(request.partial_command.lower()) else 0,
         _metadata_directory_score(metadata, request.directory),
+        _success_score(metadata),
         int(metadata.get("count", 0) or 0),
         metadata.get("last_used_at") or "",
     )
@@ -215,6 +237,7 @@ def _temp_suggestion_sort_key(item: dict, request: CommandSuggestRequest):
     return (
         1 if command.lower().startswith(request.partial_command.lower()) else 0,
         _metadata_directory_score(metadata, request.directory),
+        _success_score(metadata),
         int(metadata.get("count", 0) or 0),
         metadata.get("last_used_at") or "",
     )

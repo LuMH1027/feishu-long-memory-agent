@@ -217,6 +217,16 @@ def test_calculate_cli_relevance_score_combines_frequency_recency_and_prefix():
     assert retriever.calculate_cli_relevance_score("git", memory) == pytest.approx(0.9)
 
 
+def test_calculate_cli_relevance_score_includes_success_rate():
+    memory = SimpleNamespace(
+        content="npm run deploy",
+        similarity_score=0.4,
+        cli_metadata={"success_count": 3, "failure_count": 1},
+    )
+
+    assert retriever.calculate_cli_relevance_score("deploy", memory) == pytest.approx(0.55)
+
+
 def test_calculate_cli_relevance_score_ignores_invalid_metadata_values():
     memory = SimpleNamespace(
         content="docker compose up",

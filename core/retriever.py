@@ -50,7 +50,17 @@ def calculate_cli_relevance_score(query: str, memory: Memory) -> float:
             pass
 
     prefix_score = 0.2 if is_cli_prefix_match(query, memory) else 0.0
-    return base_score + count_score + recency_score + prefix_score
+
+    try:
+        success_count = int(metadata.get("success_count", 0) or 0)
+        failure_count = int(metadata.get("failure_count", 0) or 0)
+    except (TypeError, ValueError):
+        success_count = 0
+        failure_count = 0
+    total_runs = success_count + failure_count
+    success_score = (success_count / total_runs) * 0.2 if total_runs else 0.0
+
+    return base_score + count_score + recency_score + prefix_score + success_score
 
 
 def _search_sort_key(query: str, memory: Memory):

@@ -2,6 +2,7 @@ import json
 import shutil
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -52,18 +53,39 @@ def test_search_copy_copies_first_result(monkeypatch, cli_results):
 
 def test_search_execute_runs_first_result(monkeypatch, cli_results):
     executed = {}
+    posted = []
 
     monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None, directory=None: cli_results)
     monkeypatch.setattr(
+        cli_main,
+        "_request",
+        lambda method, path, **kwargs: posted.append((method, path, kwargs)) or FakeResponse({"status": "success"}),
+    )
+    monkeypatch.setattr(
         cli_main.subprocess,
         "run",
-        lambda cmd, shell: executed.update({"cmd": cmd, "shell": shell}),
+        lambda cmd, shell: executed.update({"cmd": cmd, "shell": shell}) or SimpleNamespace(returncode=7),
     )
 
     result = runner.invoke(cli_main.app, ["search", "test", "--execute"])
 
     assert result.exit_code == 0
     assert executed == {"cmd": "echo test command", "shell": True}
+    assert posted == [
+        (
+            "POST",
+            "/cli/command/record",
+            {
+                "json": {
+                    "command": "echo test command",
+                    "count": 1,
+                    "shell": "powershell",
+                    "directory": str(Path.cwd()),
+                    "exit_code": 7,
+                }
+            },
+        )
+    ]
     assert "🚀 执行命令：echo test command" in result.output
 
 

@@ -119,6 +119,39 @@ def test_suggest_command_prioritizes_matching_directory_context():
     ]
 
 
+def test_record_command_tracks_execution_feedback_counts():
+    asyncio.run(
+        cli.record_command(cli.CommandRecordRequest(command="npm test", count=1, shell="bash", exit_code=0))
+    )
+    asyncio.run(
+        cli.record_command(cli.CommandRecordRequest(command="npm test", count=1, shell="bash", exit_code=1))
+    )
+
+    metadata = cli.temp_command_storage[0]["metadata"]
+    assert metadata["count"] == 2
+    assert metadata["success_count"] == 1
+    assert metadata["failure_count"] == 1
+    assert metadata["last_exit_code"] == 1
+    assert metadata["exit_code"] == 1
+    assert "last_failed_at" in metadata
+
+
+def test_suggest_command_prioritizes_successful_command_when_other_signals_tie():
+    asyncio.run(
+        cli.record_command(cli.CommandRecordRequest(command="npm run deploy-success", count=2, shell="bash", exit_code=0))
+    )
+    asyncio.run(
+        cli.record_command(cli.CommandRecordRequest(command="npm run deploy-fail", count=2, shell="bash", exit_code=1))
+    )
+
+    response = asyncio.run(cli.suggest_command(cli.CommandSuggestRequest(partial_command="npm deploy")))
+
+    assert [item["command"] for item in response["suggestions"]] == [
+        "npm run deploy-success",
+        "npm run deploy-fail",
+    ]
+
+
 def test_list_commands_returns_recent_records():
     asyncio.run(cli.record_command(cli.CommandRecordRequest(command="first", count=1, shell="bash")))
     asyncio.run(cli.record_command(cli.CommandRecordRequest(command="second", count=1, shell="bash")))
