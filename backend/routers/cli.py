@@ -5,7 +5,9 @@ from datetime import datetime
 from typing import Optional, List
 import json
 import uuid
+from pathlib import PurePath
 from backend.dependencies import get_db
+from core.command_parser import parse_command, pattern_text
 from db.relational.models import Memory
 
 cli_router = APIRouter(prefix="/cli", tags=["CLI"])
@@ -31,7 +33,8 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
             metadata["count"] = int(metadata.get("count", 0) or 0) + request.count
             metadata["last_used_at"] = now
             metadata["shell"] = request.shell
-            metadata["directory"] = request.directory
+            _track_directory(metadata, request.directory, request.count)
+            _attach_command_pattern(metadata, request.command)
             if request.exit_code is not None:
                 metadata["exit_code"] = request.exit_code
             existing.description = existing.description or f"{request.shell}命令"
@@ -45,6 +48,8 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
                 "first_used_at": now,
                 "last_used_at": now,
             }
+            _track_directory(metadata, request.directory, request.count)
+            _attach_command_pattern(metadata, request.command)
             if request.exit_code is not None:
                 metadata["exit_code"] = request.exit_code
             db.add(
@@ -67,6 +72,8 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
         # 更新使用次数
         existing["metadata"]["count"] += request.count
         existing["metadata"]["last_used_at"] = datetime.now().isoformat()
+        _track_directory(existing["metadata"], request.directory, request.count)
+        _attach_command_pattern(existing["metadata"], request.command)
     else:
         # 创建新记忆
         new_command = {
@@ -78,6 +85,8 @@ async def record_command(request: CommandRecordRequest, db: Session = Depends(ge
                 "count": request.count,
                 "shell": request.shell,
                 "directory": request.directory,
+                "directories": {request.directory: request.count} if request.directory else {},
+                "command_pattern": parse_command(request.command),
                 "first_used_at": datetime.now().isoformat(),
                 "last_used_at": datetime.now().isoformat()
             }
@@ -116,6 +125,60 @@ def _metadata_from_json(raw: Optional[str]) -> dict:
         return {}
 
 
+def _normalize_directory(directory: Optional[str]) -> str:
+    return (directory or "").replace("\\", "/").rstrip("/").lower()
+
+
+def _directory_score(stored_directory: Optional[str], request_directory: Optional[str]) -> float:
+    stored = _normalize_directory(stored_directory)
+    requested = _normalize_directory(request_directory)
+    if not stored or not requested:
+        return 0.0
+    if stored == requested:
+        return 0.4
+    if requested.startswith(f"{stored}/") or stored.startswith(f"{requested}/"):
+        return 0.25
+
+    stored_name = PurePath(stored).name
+    requested_name = PurePath(requested).name
+    if stored_name and stored_name == requested_name:
+        return 0.1
+    return 0.0
+
+
+def _metadata_directory_score(metadata: dict, request_directory: Optional[str]) -> float:
+    best_score = _directory_score(metadata.get("directory"), request_directory)
+    directories = metadata.get("directories")
+    if isinstance(directories, dict):
+        for directory in directories:
+            best_score = max(best_score, _directory_score(directory, request_directory))
+    elif isinstance(directories, list):
+        for directory in directories:
+            best_score = max(best_score, _directory_score(directory, request_directory))
+    return best_score
+
+
+def _track_directory(metadata: dict, directory: Optional[str], count: int) -> None:
+    if not directory:
+        return
+    metadata["directory"] = directory
+    directories = metadata.get("directories")
+    if not isinstance(directories, dict):
+        directories = {}
+    directories[directory] = int(directories.get(directory, 0) or 0) + count
+    metadata["directories"] = directories
+
+
+def _attach_command_pattern(metadata: dict, command: str) -> None:
+    metadata["command_pattern"] = parse_command(command)
+
+
+def _command_haystack(command: str, metadata: dict) -> str:
+    pattern = metadata.get("command_pattern")
+    pattern_part = pattern_text(pattern) if isinstance(pattern, dict) else ""
+    return f"{command} {pattern_part}".lower()
+
+
 def _command_to_suggestion(memory: Memory) -> dict:
     metadata = _metadata_from_json(memory.memory_metadata)
     return {
@@ -129,6 +192,32 @@ def _command_to_suggestion(memory: Memory) -> dict:
 def _matches_partial_command(command: str, partial_command: str) -> bool:
     command_lower = command.lower()
     return all(token in command_lower for token in partial_command.lower().split())
+
+
+def _matches_command_memory(command: str, metadata: dict, partial_command: str) -> bool:
+    haystack = _command_haystack(command, metadata)
+    return all(token in haystack for token in partial_command.lower().split())
+
+
+def _suggestion_sort_key(memory: Memory, request: CommandSuggestRequest):
+    metadata = _metadata_from_json(memory.memory_metadata)
+    return (
+        1 if memory.content.lower().startswith(request.partial_command.lower()) else 0,
+        _metadata_directory_score(metadata, request.directory),
+        int(metadata.get("count", 0) or 0),
+        metadata.get("last_used_at") or "",
+    )
+
+
+def _temp_suggestion_sort_key(item: dict, request: CommandSuggestRequest):
+    metadata = item.get("metadata") or {}
+    command = item.get("command", "")
+    return (
+        1 if command.lower().startswith(request.partial_command.lower()) else 0,
+        _metadata_directory_score(metadata, request.directory),
+        int(metadata.get("count", 0) or 0),
+        metadata.get("last_used_at") or "",
+    )
 
 
 @cli_router.get("/command/list", summary="查看已记录CLI命令")
@@ -163,19 +252,19 @@ async def suggest_command(request: CommandSuggestRequest, db: Session = Depends(
         results = [
             memory
             for memory in memories
-            if _matches_partial_command(memory.content, request.partial_command)
+            if _matches_command_memory(memory.content, _metadata_from_json(memory.memory_metadata), request.partial_command)
         ]
-        results.sort(key=lambda memory: _metadata_from_json(memory.memory_metadata).get("count", 0), reverse=True)
+        results.sort(key=lambda memory: _suggestion_sort_key(memory, request), reverse=True)
         return {"suggestions": [_command_to_suggestion(memory) for memory in results]}
 
     # 搜索相关命令
     results = [
         item for item in temp_command_storage 
-        if _matches_partial_command(item["command"], request.partial_command)
+        if _matches_command_memory(item["command"], item.get("metadata") or {}, request.partial_command)
     ]
     
     # 按使用频率排序
-    results.sort(key=lambda x: x["metadata"]["count"], reverse=True)
+    results.sort(key=lambda item: _temp_suggestion_sort_key(item, request), reverse=True)
     
     return {
         "suggestions": [

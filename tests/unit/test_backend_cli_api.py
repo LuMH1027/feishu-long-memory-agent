@@ -31,13 +31,22 @@ def test_record_command_creates_cli_memory():
             "command": "pytest tests/unit",
             "type": "cli_command",
             "description": "powershell命令",
-            "metadata": {
-                "count": 3,
-                "shell": "powershell",
-                "directory": "E:/repo",
-                "first_used_at": cli.temp_command_storage[0]["metadata"]["first_used_at"],
-                "last_used_at": cli.temp_command_storage[0]["metadata"]["last_used_at"],
-            },
+                "metadata": {
+                    "count": 3,
+                    "shell": "powershell",
+                    "directory": "E:/repo",
+                    "directories": {"E:/repo": 3},
+                    "command_pattern": {
+                        "program": "pytest",
+                        "subcommand": "tests/unit",
+                        "command_family": "pytest tests/unit",
+                        "flags": {},
+                        "positionals": [],
+                        "paths": [],
+                    },
+                    "first_used_at": cli.temp_command_storage[0]["metadata"]["first_used_at"],
+                    "last_used_at": cli.temp_command_storage[0]["metadata"]["last_used_at"],
+                },
         }
     ]
 
@@ -71,6 +80,43 @@ def test_suggest_command_matches_all_tokens_when_not_contiguous():
     response = asyncio.run(cli.suggest_command(cli.CommandSuggestRequest(partial_command="docker exited")))
 
     assert [item["command"] for item in response["suggestions"]] == ["docker ps -a --filter status=exited"]
+
+
+def test_suggest_command_prioritizes_matching_directory_context():
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(
+                command="npm run deploy -- --env staging",
+                count=8,
+                shell="powershell",
+                directory="E:/workspace/project-a",
+            )
+        )
+    )
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(
+                command="npm run deploy -- --env prod",
+                count=2,
+                shell="powershell",
+                directory="E:/workspace/project-b",
+            )
+        )
+    )
+
+    response = asyncio.run(
+        cli.suggest_command(
+            cli.CommandSuggestRequest(
+                partial_command="npm deploy",
+                directory="E:/workspace/project-b",
+            )
+        )
+    )
+
+    assert [item["command"] for item in response["suggestions"]] == [
+        "npm run deploy -- --env prod",
+        "npm run deploy -- --env staging",
+    ]
 
 
 def test_list_commands_returns_recent_records():

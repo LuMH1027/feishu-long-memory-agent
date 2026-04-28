@@ -131,10 +131,47 @@ def _memory_search_score(memory: dict[str, Any], query: str) -> int:
     return score
 
 
-def _sort_and_limit(results: list[dict[str, Any]], query: str, limit: int) -> list[dict[str, Any]]:
+def _normalize_directory(directory: Optional[str]) -> str:
+    return (directory or "").replace("\\", "/").rstrip("/").lower()
+
+
+def _directory_score(metadata: dict[str, Any], request_directory: Optional[str]) -> float:
+    requested = _normalize_directory(request_directory)
+    if not requested:
+        return 0.0
+
+    candidates = []
+    directory = metadata.get("directory")
+    if isinstance(directory, str):
+        candidates.append(directory)
+    directories = metadata.get("directories")
+    if isinstance(directories, dict):
+        candidates.extend(str(directory) for directory in directories)
+    elif isinstance(directories, list):
+        candidates.extend(str(directory) for directory in directories)
+
+    best_score = 0.0
+    for candidate in candidates:
+        stored = _normalize_directory(candidate)
+        if not stored:
+            continue
+        if stored == requested:
+            best_score = max(best_score, 0.4)
+        elif requested.startswith(f"{stored}/") or stored.startswith(f"{requested}/"):
+            best_score = max(best_score, 0.25)
+    return best_score
+
+
+def _sort_and_limit(
+    results: list[dict[str, Any]],
+    query: str,
+    limit: int,
+    directory: Optional[str] = None,
+) -> list[dict[str, Any]]:
     results.sort(
         key=lambda memory: (
             1 if str(memory.get("content", "")).lower().startswith(query.lower()) else 0,
+            _directory_score(memory.get("metadata") or {}, directory),
             _memory_search_score(memory, query),
             (memory.get("metadata") or {}).get("count", 0),
             memory.get("updated_at") or "",
@@ -144,7 +181,12 @@ def _sort_and_limit(results: list[dict[str, Any]], query: str, limit: int) -> li
     return results[:limit]
 
 
-def _search_temp(query: str, memory_type: Optional[str], limit: int) -> list[dict[str, Any]]:
+def _search_temp(
+    query: str,
+    memory_type: Optional[str],
+    limit: int,
+    directory: Optional[str] = None,
+) -> list[dict[str, Any]]:
     results = [
         memory
         for memory in temp_memory_storage
@@ -152,10 +194,16 @@ def _search_temp(query: str, memory_type: Optional[str], limit: int) -> list[dic
     ]
     for memory in results[:limit]:
         memory["hit_count"] = memory.get("hit_count", 0) + 1
-    return _sort_and_limit(results, query, limit)
+    return _sort_and_limit(results, query, limit, directory)
 
 
-def _search_db(db: Session, query: str, memory_type: Optional[str], limit: int) -> list[dict[str, Any]]:
+def _search_db(
+    db: Session,
+    query: str,
+    memory_type: Optional[str],
+    limit: int,
+    directory: Optional[str] = None,
+) -> list[dict[str, Any]]:
     vector_results = []
     try:
         from core import retriever
@@ -176,7 +224,7 @@ def _search_db(db: Session, query: str, memory_type: Optional[str], limit: int) 
         if memory_dict["id"] not in seen_ids and _memory_search_score(memory_dict, query) > 0:
             keyword_results.append(memory_dict)
 
-    results = _sort_and_limit(vector_results + keyword_results, query, limit)
+    results = _sort_and_limit(vector_results + keyword_results, query, limit, directory)
     for result in results:
         memory = db.query(Memory).filter(Memory.id == result["id"]).first()
         if memory:
@@ -220,10 +268,16 @@ def list_memories(limit: int = 10, db: Session = Depends(get_db)):
 
 
 @router.get("/search", summary="搜索记忆")
-def search_memories(query: str, limit: int = 5, type: Optional[str] = None, db: Session = Depends(get_db)):
+def search_memories(
+    query: str,
+    limit: int = 5,
+    type: Optional[str] = None,
+    directory: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
     if not _has_db(db):
-        return _search_temp(query, type, limit)
-    return _search_db(db, query, type, limit)
+        return _search_temp(query, type, limit, directory)
+    return _search_db(db, query, type, limit, directory)
 
 
 @router.post("/retrieve", summary="检索相关记忆")

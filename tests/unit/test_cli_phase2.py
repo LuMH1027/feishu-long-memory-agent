@@ -40,7 +40,7 @@ def cli_results():
 def test_search_copy_copies_first_result(monkeypatch, cli_results):
     copied = {}
 
-    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None: cli_results)
+    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None, directory=None: cli_results)
     monkeypatch.setattr(cli_main.pyperclip, "copy", lambda value: copied.setdefault("value", value))
 
     result = runner.invoke(cli_main.app, ["search", "test", "--copy"])
@@ -53,7 +53,7 @@ def test_search_copy_copies_first_result(monkeypatch, cli_results):
 def test_search_execute_runs_first_result(monkeypatch, cli_results):
     executed = {}
 
-    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None: cli_results)
+    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None, directory=None: cli_results)
     monkeypatch.setattr(
         cli_main.subprocess,
         "run",
@@ -70,7 +70,7 @@ def test_search_execute_runs_first_result(monkeypatch, cli_results):
 def test_search_interactive_can_copy_selected_result(monkeypatch, cli_results):
     copied = {}
 
-    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None: cli_results)
+    monkeypatch.setattr(cli_main, "_search_memories", lambda query, limit, memory_type=None, directory=None: cli_results)
     monkeypatch.setattr(cli_main.pyperclip, "copy", lambda value: copied.setdefault("value", value))
 
     result = runner.invoke(cli_main.app, ["search", "test"], input="1\n2\n")
@@ -118,8 +118,45 @@ def test_watch_records_high_frequency_history(monkeypatch):
         "command": "echo test watch command",
         "count": 3,
         "shell": "bash",
+        "directory": str(Path.cwd()),
     }
     assert "✅ 已扫描历史命令，自动记录了1条高频命令" in result.output
+
+
+def test_suggest_outputs_plain_command_candidates(monkeypatch):
+    posted = []
+    monkeypatch.setenv("SHELL", "powershell")
+    monkeypatch.setattr(
+        cli_main,
+        "_request",
+        lambda method, path, **kwargs: posted.append((method, path, kwargs))
+        or FakeResponse(
+            {
+                "suggestions": [
+                    {"command": "docker ps -a --filter status=exited"},
+                    {"command": "docker logs webapp"},
+                ]
+            }
+        ),
+    )
+
+    result = runner.invoke(cli_main.app, ["suggest", "docker", "--limit", "1"])
+
+    assert result.exit_code == 0
+    assert posted == [
+        (
+            "POST",
+            "/cli/command/suggest",
+            {
+                "json": {
+                    "partial_command": "docker",
+                    "shell": "powershell",
+                    "directory": str(Path.cwd()),
+                }
+            },
+        )
+    ]
+    assert result.output == "docker ps -a --filter status=exited\n"
 
 
 def test_workflow_save_posts_workflow_payload(monkeypatch):
@@ -149,7 +186,7 @@ def test_workflow_run_prompts_and_executes_confirmed_steps(monkeypatch):
     monkeypatch.setattr(
         cli_main,
         "_search_memories",
-        lambda query, limit, memory_type=None: [
+        lambda query, limit, memory_type=None, directory=None: [
             {"content": json.dumps(workflow, ensure_ascii=False), "type": "cli_workflow", "metadata": {}}
         ],
     )

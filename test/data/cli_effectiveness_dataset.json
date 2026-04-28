@@ -1,0 +1,370 @@
+{
+  "dataset_name": "cli_memory_effectiveness_v1",
+  "created_at": "2026-04-27T15:22:00+08:00",
+  "purpose": "用于 CLI 方向验收：证明命令记忆在强干扰、矛盾更新和效率提升场景下有效。",
+  "global_assumptions": {
+    "current_time": "2026-04-27T15:22:00+08:00",
+    "one_week_ago": "2026-04-20T09:00:00+08:00",
+    "retrieval_interface": "mem search <query>",
+    "write_interface": "mem memorize <content> --type <type>",
+    "success_criteria": {
+      "anti_interference_hit_at_1": ">= 0.90",
+      "anti_interference_hit_at_3": ">= 1.00",
+      "contradiction_latest_win_rate": ">= 1.00",
+      "average_character_saving_rate": ">= 0.75"
+    }
+  },
+  "anti_interference_test": {
+    "description": "在 2026-04-20 注入关键 CLI 记忆，随后 7 天追加大量无关命令、闲聊和低价值操作，验证 2026-04-27 仍能按语义精准找回。",
+    "seed_memories": [
+      {
+        "id": "anti-cli-001",
+        "timestamp": "2026-04-20T09:00:00+08:00",
+        "type": "docker启动命令",
+        "content": "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2",
+        "query": "启动webapp容器",
+        "expected_top1_contains": "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2"
+      },
+      {
+        "id": "anti-cli-002",
+        "timestamp": "2026-04-20T09:05:00+08:00",
+        "type": "k8s排障命令",
+        "content": "kubectl logs deploy/api-server -n prod --tail=200 -f",
+        "query": "查看生产api最近日志",
+        "expected_top1_contains": "kubectl logs deploy/api-server -n prod --tail=200 -f"
+      },
+      {
+        "id": "anti-cli-003",
+        "timestamp": "2026-04-20T09:10:00+08:00",
+        "type": "数据库备份命令",
+        "content": "pg_dump -h 10.0.8.12 -U ops -d orders_prod -F c -f backup/orders_prod_$(date +%F).dump",
+        "query": "备份订单生产库",
+        "expected_top1_contains": "pg_dump -h 10.0.8.12 -U ops -d orders_prod"
+      },
+      {
+        "id": "anti-cli-004",
+        "timestamp": "2026-04-20T09:15:00+08:00",
+        "type": "发布命令",
+        "content": "rsync -avz --delete dist/ deploy@10.0.8.30:/srv/www/console/",
+        "query": "发布console前端静态资源",
+        "expected_top1_contains": "rsync -avz --delete dist/ deploy@10.0.8.30:/srv/www/console/"
+      },
+      {
+        "id": "anti-cli-005",
+        "timestamp": "2026-04-20T09:20:00+08:00",
+        "type": "端口排查命令",
+        "content": "Get-NetTCPConnection -LocalPort 8080 | Select-Object LocalAddress,LocalPort,OwningProcess",
+        "query": "查8080端口被谁占用",
+        "expected_top1_contains": "Get-NetTCPConnection -LocalPort 8080"
+      },
+      {
+        "id": "anti-cli-006",
+        "timestamp": "2026-04-20T09:25:00+08:00",
+        "type": "日志打包命令",
+        "content": "tar -czf logs/api-$(date +%F).tar.gz logs/api/*.log && scp logs/api-$(date +%F).tar.gz ops@10.0.8.40:/tmp/",
+        "query": "打包并上传api日志",
+        "expected_top1_contains": "tar -czf logs/api-$(date +%F).tar.gz"
+      }
+    ],
+    "interference_stream": {
+      "total_events": 360,
+      "date_range": [
+        "2026-04-21T10:00:00+08:00",
+        "2026-04-27T14:30:00+08:00"
+      ],
+      "composition": [
+        {
+          "category": "unrelated_shell_commands",
+          "count": 160,
+          "examples": [
+            "git status",
+            "npm run lint",
+            "pytest tests/unit -q",
+            "python -m pip list",
+            "docker images",
+            "kubectl get pods -A",
+            "dir",
+            "Get-Process python"
+          ]
+        },
+        {
+          "category": "casual_chat",
+          "count": 120,
+          "examples": [
+            "今天先看一下需求排期",
+            "这个问题下午再确认",
+            "帮我记一下会议结论但不是命令",
+            "周五前把验收材料整理出来"
+          ]
+        },
+        {
+          "category": "similar_but_wrong_commands",
+          "count": 80,
+          "examples": [
+            "docker run --rm hello-world",
+            "kubectl logs deploy/test-api -n staging --tail=20",
+            "pg_dump -h localhost -U dev -d demo",
+            "rsync -avz tmp/ user@example:/tmp/",
+            "Get-NetTCPConnection -LocalPort 3000"
+          ]
+        }
+      ],
+      "generation_rule": "按日期均匀插入；similar_but_wrong_commands 与关键记忆共享部分关键词，但环境、端口、命名空间或目标路径不同。"
+    },
+    "evaluation_queries": [
+      {
+        "query": "启动webapp容器",
+        "expected_memory_id": "anti-cli-001",
+        "expected_rank": 1
+      },
+      {
+        "query": "webapp docker 8080",
+        "expected_memory_id": "anti-cli-001",
+        "expected_rank": 1
+      },
+      {
+        "query": "查看生产api最近日志",
+        "expected_memory_id": "anti-cli-002",
+        "expected_rank": 1
+      },
+      {
+        "query": "备份订单生产库",
+        "expected_memory_id": "anti-cli-003",
+        "expected_rank": 1
+      },
+      {
+        "query": "发布console前端静态资源",
+        "expected_memory_id": "anti-cli-004",
+        "expected_rank": 1
+      },
+      {
+        "query": "查8080端口被谁占用",
+        "expected_memory_id": "anti-cli-005",
+        "expected_rank": 1
+      },
+      {
+        "query": "打包上传api日志",
+        "expected_memory_id": "anti-cli-006",
+        "expected_rank": 1
+      }
+    ],
+    "target_metrics": {
+      "key_memories": 6,
+      "distractor_events": 360,
+      "signal_to_noise_ratio": "1:60",
+      "expected_hit_at_1": 1.0,
+      "expected_hit_at_3": 1.0,
+      "expected_mrr": 1.0
+    }
+  },
+  "contradiction_update_test": {
+    "description": "同一任务先保存旧命令，再保存带有否定/纠正语气的新命令，验证检索时以最新有效记忆为准。",
+    "cases": [
+      {
+        "id": "conflict-cli-001",
+        "old_memory": {
+          "timestamp": "2026-04-26T10:00:00+08:00",
+          "type": "周报发送命令",
+          "content": "以后周报发给 A：python scripts/send_weekly.py --to a@example.com"
+        },
+        "new_memory": {
+          "timestamp": "2026-04-27T09:00:00+08:00",
+          "type": "周报发送命令",
+          "content": "不对，以后周报发给 B：python scripts/send_weekly.py --to b@example.com"
+        },
+        "query": "发送周报",
+        "expected_top1_contains": "--to b@example.com",
+        "expected_not_top1_contains": "--to a@example.com"
+      },
+      {
+        "id": "conflict-cli-002",
+        "old_memory": {
+          "timestamp": "2026-04-26T11:00:00+08:00",
+          "type": "部署环境命令",
+          "content": "以后部署后台用 staging：kubectl rollout restart deploy/api-server -n staging"
+        },
+        "new_memory": {
+          "timestamp": "2026-04-27T09:15:00+08:00",
+          "type": "部署环境命令",
+          "content": "更正，以后部署后台用 prod：kubectl rollout restart deploy/api-server -n prod"
+        },
+        "query": "部署后台api",
+        "expected_top1_contains": "-n prod",
+        "expected_not_top1_contains": "-n staging"
+      },
+      {
+        "id": "conflict-cli-003",
+        "old_memory": {
+          "timestamp": "2026-04-26T12:00:00+08:00",
+          "type": "备份保留策略",
+          "content": "Redis备份保留3天：python scripts/backup_redis.py --keep-days 3"
+        },
+        "new_memory": {
+          "timestamp": "2026-04-27T09:30:00+08:00",
+          "type": "备份保留策略",
+          "content": "更新Redis备份策略，保留14天：python scripts/backup_redis.py --keep-days 14"
+        },
+        "query": "redis备份保留多久",
+        "expected_top1_contains": "--keep-days 14",
+        "expected_not_top1_contains": "--keep-days 3"
+      }
+    ],
+    "target_metrics": {
+      "conflict_cases": 3,
+      "expected_latest_win_rate": 1.0,
+      "expected_stale_top1_rate": 0.0
+    }
+  },
+  "efficiency_metrics_test": {
+    "description": "对比未使用记忆系统时手动输入完整命令，与使用 mem search + 复制/执行第一条结果时的成本。",
+    "tasks": [
+      {
+        "task": "启动webapp容器",
+        "baseline_command": "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2",
+        "assisted_query": "启动webapp",
+        "baseline_chars": 67,
+        "assisted_chars": 12,
+        "baseline_steps": 4,
+        "assisted_steps": 2,
+        "baseline_seconds": 38,
+        "assisted_seconds": 9,
+        "character_saving_rate": 0.821,
+        "step_saving_rate": 0.5,
+        "time_saving_rate": 0.763
+      },
+      {
+        "task": "查看api容器最近200行日志",
+        "baseline_command": "kubectl logs deploy/api-server -n prod --tail=200 -f",
+        "assisted_query": "api最近日志",
+        "baseline_chars": 49,
+        "assisted_chars": 14,
+        "baseline_steps": 4,
+        "assisted_steps": 2,
+        "baseline_seconds": 32,
+        "assisted_seconds": 8,
+        "character_saving_rate": 0.714,
+        "step_saving_rate": 0.5,
+        "time_saving_rate": 0.75
+      },
+      {
+        "task": "进入prod命名空间pod shell",
+        "baseline_command": "kubectl exec -it deploy/api-server -n prod -- /bin/sh",
+        "assisted_query": "进prod api shell",
+        "baseline_chars": 54,
+        "assisted_chars": 15,
+        "baseline_steps": 5,
+        "assisted_steps": 2,
+        "baseline_seconds": 45,
+        "assisted_seconds": 10,
+        "character_saving_rate": 0.722,
+        "step_saving_rate": 0.6,
+        "time_saving_rate": 0.778
+      },
+      {
+        "task": "按日期备份postgres订单库",
+        "baseline_command": "pg_dump -h 10.0.8.12 -U ops -d orders_prod -F c -f backup/orders_prod_$(date +%F).dump",
+        "assisted_query": "备份订单库",
+        "baseline_chars": 82,
+        "assisted_chars": 13,
+        "baseline_steps": 6,
+        "assisted_steps": 2,
+        "baseline_seconds": 60,
+        "assisted_seconds": 12,
+        "character_saving_rate": 0.841,
+        "step_saving_rate": 0.667,
+        "time_saving_rate": 0.8
+      },
+      {
+        "task": "rsync发布静态资源",
+        "baseline_command": "rsync -avz --delete dist/ deploy@10.0.8.30:/srv/www/console/",
+        "assisted_query": "发布console",
+        "baseline_chars": 79,
+        "assisted_chars": 11,
+        "baseline_steps": 5,
+        "assisted_steps": 2,
+        "baseline_seconds": 50,
+        "assisted_seconds": 9,
+        "character_saving_rate": 0.861,
+        "step_saving_rate": 0.6,
+        "time_saving_rate": 0.82
+      },
+      {
+        "task": "查找占用8080端口进程",
+        "baseline_command": "Get-NetTCPConnection -LocalPort 8080 | Select-Object LocalAddress,LocalPort,OwningProcess",
+        "assisted_query": "查8080端口",
+        "baseline_chars": 48,
+        "assisted_chars": 10,
+        "baseline_steps": 4,
+        "assisted_steps": 2,
+        "baseline_seconds": 28,
+        "assisted_seconds": 7,
+        "character_saving_rate": 0.792,
+        "step_saving_rate": 0.5,
+        "time_saving_rate": 0.75
+      },
+      {
+        "task": "重建前端依赖并启动",
+        "baseline_command": "Remove-Item node_modules -Recurse -Force; npm install; npm run dev",
+        "assisted_query": "前端重装启动",
+        "baseline_chars": 44,
+        "assisted_chars": 9,
+        "baseline_steps": 5,
+        "assisted_steps": 2,
+        "baseline_seconds": 40,
+        "assisted_seconds": 8,
+        "character_saving_rate": 0.795,
+        "step_saving_rate": 0.6,
+        "time_saving_rate": 0.8
+      },
+      {
+        "task": "压缩并上传日志包",
+        "baseline_command": "tar -czf logs/api-$(date +%F).tar.gz logs/api/*.log && scp logs/api-$(date +%F).tar.gz ops@10.0.8.40:/tmp/",
+        "assisted_query": "上传api日志",
+        "baseline_chars": 73,
+        "assisted_chars": 12,
+        "baseline_steps": 6,
+        "assisted_steps": 2,
+        "baseline_seconds": 58,
+        "assisted_seconds": 11,
+        "character_saving_rate": 0.836,
+        "step_saving_rate": 0.667,
+        "time_saving_rate": 0.81
+      },
+      {
+        "task": "清理docker悬挂资源",
+        "baseline_command": "docker system prune -f && docker volume prune -f",
+        "assisted_query": "清理docker",
+        "baseline_chars": 58,
+        "assisted_chars": 10,
+        "baseline_steps": 4,
+        "assisted_steps": 2,
+        "baseline_seconds": 30,
+        "assisted_seconds": 7,
+        "character_saving_rate": 0.828,
+        "step_saving_rate": 0.5,
+        "time_saving_rate": 0.767
+      },
+      {
+        "task": "恢复最近一次redis备份",
+        "baseline_command": "python scripts/restore_redis.py --source backup/redis-latest.rdb --target prod",
+        "assisted_query": "恢复redis备份",
+        "baseline_chars": 71,
+        "assisted_chars": 13,
+        "baseline_steps": 6,
+        "assisted_steps": 2,
+        "baseline_seconds": 55,
+        "assisted_seconds": 12,
+        "character_saving_rate": 0.817,
+        "step_saving_rate": 0.667,
+        "time_saving_rate": 0.782
+      }
+    ],
+    "summary_metrics": {
+      "task_count": 10,
+      "average_character_saving_rate": 0.803,
+      "average_step_saving_rate": 0.58,
+      "average_time_saving_rate": 0.782,
+      "headline": "使用前平均需要输入 62.5 个字符，使用后平均只需 11.9 个字符，字符输入量减少 80.3%；平均操作步数减少 58.0%；平均耗时减少 78.2%。"
+    }
+  }
+}

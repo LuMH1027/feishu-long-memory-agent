@@ -21,7 +21,7 @@ sys.modules.setdefault(
     types.SimpleNamespace(OpenAI=lambda **kwargs: SimpleNamespace(embeddings=SimpleNamespace(create=lambda **kw: None))),
 )
 
-from core import retriever, storage
+from core import command_parser, retriever, storage
 from core.utils import embedding
 from db.vector.client import VectorClient
 import init_db
@@ -111,6 +111,31 @@ def test_save_memory_persists_relational_and_vector_records(monkeypatch):
             },
         }
     ]
+
+
+def test_parse_command_extracts_program_flags_positionals_and_paths():
+    pattern = command_parser.parse_command(
+        "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2"
+    )
+
+    assert pattern == {
+        "program": "docker",
+        "subcommand": "run",
+        "command_family": "docker run",
+        "flags": {"-p": "8080:80", "-v": "/data:/app/data", "--name": "webapp"},
+        "positionals": ["my-image:1.2"],
+        "paths": ["/data:/app/data"],
+    }
+
+
+def test_pattern_text_makes_flags_searchable():
+    pattern = command_parser.parse_command("kubectl logs deploy/api -n prod --tail=200")
+
+    text = command_parser.pattern_text(pattern)
+
+    assert "kubectl logs" in text
+    assert "-n prod" in text
+    assert "--tail 200" in text
 
 
 def test_get_memory_by_id_returns_first_query_result():

@@ -46,6 +46,11 @@ def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
     return requests.request(method, f"{get_api_base()}{path}", **kwargs)
 
 
+def _current_directory() -> str:
+    """Return the current working directory as CLI context."""
+    return str(Path.cwd())
+
+
 def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     """Unify memory and CLI-command result shapes for CLI rendering."""
     metadata = result.get("metadata") or {}
@@ -62,10 +67,17 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _search_memories(query: str, limit: int, memory_type: Optional[str] = None) -> list[dict[str, Any]]:
+def _search_memories(
+    query: str,
+    limit: int,
+    memory_type: Optional[str] = None,
+    directory: Optional[str] = None,
+) -> list[dict[str, Any]]:
     params: dict[str, Any] = {"query": query, "limit": limit}
     if memory_type:
         params["type"] = memory_type
+    if directory:
+        params["directory"] = directory
 
     results = []
     try:
@@ -90,7 +102,11 @@ def _search_memories(query: str, limit: int, memory_type: Optional[str] = None) 
         response = _request(
             "POST",
             "/cli/command/suggest",
-            json={"partial_command": query, "shell": os.getenv("SHELL", "powershell")},
+            json={
+                "partial_command": query,
+                "shell": os.getenv("SHELL", "powershell"),
+                "directory": directory or _current_directory(),
+            },
         )
         response.raise_for_status()
         suggestions = response.json().get("suggestions", [])
@@ -172,7 +188,7 @@ def search(
 ):
     """搜索相关记忆"""
     try:
-        results = _search_memories(query, limit, type)
+        results = _search_memories(query, limit, type, _current_directory())
         if not results:
             typer.echo("❌ 没有找到相关记忆")
             return
@@ -220,6 +236,32 @@ def search(
 
 
 @app.command()
+def suggest(
+    prefix: str = typer.Argument(..., help="Command prefix or keywords"),
+    limit: int = typer.Option(5, help="Maximum number of suggestions"),
+):
+    """Output command suggestions for shell completion integrations."""
+    try:
+        response = _request(
+            "POST",
+            "/cli/command/suggest",
+            json={
+                "partial_command": prefix,
+                "shell": os.getenv("SHELL", "powershell"),
+                "directory": _current_directory(),
+            },
+        )
+        response.raise_for_status()
+        suggestions = response.json().get("suggestions", [])
+        for item in suggestions[:limit]:
+            command = item.get("command")
+            if command:
+                typer.echo(command)
+    except Exception as e:
+        typer.echo(f"鉂?鎺ㄨ崘澶辫触: {str(e)}", err=True)
+
+
+@app.command()
 def watch(
     shell: str = typer.Option("powershell", help="要监控的shell类型：powershell/bash/zsh"),
     auto_record_threshold: int = typer.Option(3, help="命令使用多少次后自动记录"),
@@ -262,7 +304,7 @@ def watch(
             response = _request(
                 "POST",
                 "/cli/command/record",
-                json={"command": cmd, "count": count, "shell": shell},
+                json={"command": cmd, "count": count, "shell": shell, "directory": _current_directory()},
             )
             response.raise_for_status()
             recorded_count += 1
@@ -315,7 +357,7 @@ def save_workflow(
 def run_workflow(name: str = typer.Argument(..., help="工作流名称")):
     """执行已保存的工作流"""
     try:
-        results = _search_memories(name, 1, "cli_workflow")
+        results = _search_memories(name, 1, "cli_workflow", _current_directory())
         if not results:
             typer.echo(f"❌ 未找到工作流《{name}》")
             return
