@@ -175,8 +175,12 @@ def test_feishu_callback_rejects_invalid_signature():
 
 def test_push_feishu_message_returns_ok():
     feishu = load_feishu_router(True)
+    calls = []
 
-    assert feishu.push_feishu_message("user-1", "hello") == {"status": "ok"}
+    feishu._send_group_text = lambda chat_id, text: calls.append((chat_id, text)) or {"status": "ok"}
+
+    assert feishu.push_feishu_message("chat-1", "hello") == {"status": "ok"}
+    assert calls == [("chat-1", "hello")]
 
 
 def test_feishu_decision_extract_stores_structured_project_decision():
@@ -271,3 +275,57 @@ def test_feishu_decision_reorders_cli_suggestions_by_team_policy():
         "kubectl apply -f k8s/prod.yaml",
         "kubectl apply -f k8s/staging.yaml",
     ]
+
+
+def test_feishu_auto_reply_uses_lark_cli_when_enabled(monkeypatch):
+    feishu = load_feishu_router(True)
+    sent = []
+    monkeypatch.setenv("FEISHU_AUTO_REPLY", "true")
+    monkeypatch.setattr(feishu, "_send_group_text", lambda chat_id, text: sent.append((chat_id, text)) or {"status": "ok"})
+
+    response = feishu.handle_feishu_message(
+        feishu.FeishuMessage(
+            content="以后 project-a 统一用 prod 部署，不再使用 staging",
+            chat_id="chat-1",
+            user_id="lead-1",
+        )
+    )
+
+    assert response["action"] == "decision_stored"
+    assert response["reply"] == {"status": "ok"}
+    assert sent == [("chat-1", "已记录团队决策：以后 project-a 统一用 prod 部署，不再使用 staging")]
+
+
+def test_lark_cli_adapter_builds_official_send_command(monkeypatch):
+    from feishu_bot import lark_cli
+
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = '{"ok": true}'
+        stderr = ""
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Completed()
+
+    monkeypatch.setattr(lark_cli.subprocess, "run", fake_run)
+
+    response = lark_cli.send_text_message("chat-1", "hello", cli_bin="lark-cli", timeout=3)
+
+    assert response["status"] == "ok"
+    assert calls[0][0] == [
+        "lark-cli",
+        "im",
+        "+messages-send",
+        "--as",
+        "bot",
+        "--chat-id",
+        "chat-1",
+        "--text",
+        "hello",
+        "--format",
+        "json",
+    ]
+    assert calls[0][1]["timeout"] == 3

@@ -214,6 +214,48 @@ def _memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cards_to_text(cards: list[dict[str, Any]]) -> str:
+    if not cards:
+        return "没有找到相关团队记忆。"
+
+    lines = ["找到以下团队记忆："]
+    for index, card in enumerate(cards, start=1):
+        card_type = card.get("card_type")
+        if card_type == "cli_command":
+            lines.append(f"{index}. 历史 CLI 命令：{card.get('command')}")
+            if card.get("usage_count"):
+                lines.append(f"   使用次数：{card.get('usage_count')}")
+            if card.get("directory"):
+                lines.append(f"   项目目录：{card.get('directory')}")
+        elif card_type == "workflow":
+            lines.append(f"{index}. 工作流：{card.get('title')}")
+            for step_index, step in enumerate(card.get("steps") or [], start=1):
+                lines.append(f"   {step_index}) {step}")
+        else:
+            lines.append(f"{index}. 团队决策：{card.get('summary')}")
+            if card.get("reason"):
+                lines.append(f"   原因：{card.get('reason')}")
+            if card.get("preferred_terms"):
+                lines.append(f"   推荐：{', '.join(card.get('preferred_terms'))}")
+            if card.get("rejected_terms"):
+                lines.append(f"   废弃：{', '.join(card.get('rejected_terms'))}")
+    return "\n".join(lines)
+
+
+def _send_group_text(chat_id: Optional[str], text: str) -> dict[str, Any]:
+    if not chat_id:
+        return {"status": "skipped", "reason": "缺少 chat_id"}
+    try:
+        from feishu_bot.lark_cli import send_text_message
+    except Exception as exc:
+        return {"status": "error", "provider": "lark-cli", "message": str(exc)}
+    return send_text_message(chat_id=chat_id, text=text)
+
+
+def _auto_reply_enabled() -> bool:
+    return os.getenv("FEISHU_AUTO_REPLY", "").lower() in {"1", "true", "yes", "on"}
+
+
 def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict[str, Any]:
     decision = extract_decision(request.content, request.chat_id)
     metadata = {
@@ -333,8 +375,8 @@ async def feishu_event_callback(request: Request, db: Session = Depends(get_db))
 
 @router.post("/message/push")
 def push_feishu_message(user_id: str, content: str):
-    """主动推送消息到飞书。当前返回可测试结构，真实推送由飞书 OpenAPI 适配层接入。"""
-    return {"status": "ok"}
+    """使用 larksuite/cli 主动推送文本消息到飞书群。user_id 参数兼容旧接口，这里作为 chat_id 使用。"""
+    return _send_group_text(user_id, content)
 
 
 @router.post("/decision/extract")
@@ -366,14 +408,21 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             ),
             db,
         )
-        return {"action": "decision_stored", **stored}
+        reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
+        if _auto_reply_enabled():
+            reply = _send_group_text(message.chat_id, f"已记录团队决策：{stored['decision']['conclusion']}")
+        return {"action": "decision_stored", "reply": reply, **stored}
 
     should_push = message.mentioned or is_query_message(message.content)
     cards = _query_related_cards(message.content, 3, db) if should_push else []
+    reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
+    if cards and _auto_reply_enabled():
+        reply = _send_group_text(message.chat_id, _cards_to_text(cards))
     return {
         "action": "suggest_cards" if cards else "ignored",
         "should_push": bool(cards),
         "cards": cards,
+        "reply": reply,
     }
 
 
