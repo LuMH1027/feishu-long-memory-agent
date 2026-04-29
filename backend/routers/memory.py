@@ -85,6 +85,109 @@ def _memory_from_payload(payload: MemoryStoreRequest) -> dict[str, Any]:
     }
 
 
+CORRECTION_MARKERS = (
+    "不对",
+    "更正",
+    "改成",
+    "以后用",
+    "以后改",
+    "不再使用",
+    "更新",
+)
+
+
+def _is_correction_memory(content: str) -> bool:
+    content_lower = (content or "").lower()
+    return any(marker.lower() in content_lower for marker in CORRECTION_MARKERS)
+
+
+def _topic_key(payload: MemoryStoreRequest) -> str:
+    explicit_topic = payload.metadata.get("topic_key")
+    if explicit_topic:
+        return str(explicit_topic)
+    return f"{payload.source}:{payload.type}:{payload.user_id or ''}:{payload.team_id or ''}"
+
+
+def _is_active_memory(memory: dict[str, Any]) -> bool:
+    metadata = memory.get("metadata") or {}
+    return metadata.get("status", "active") != "inactive"
+
+
+def _prepare_correction_metadata(payload: MemoryStoreRequest, supersedes: list[str]) -> MemoryStoreRequest:
+    metadata = dict(payload.metadata or {})
+    metadata.setdefault("status", "active")
+    if _is_correction_memory(payload.content):
+        metadata["topic_key"] = _topic_key(payload)
+        metadata["supersedes"] = supersedes
+    return payload.model_copy(update={"metadata": metadata})
+
+
+def _matching_topic_memory(memory: dict[str, Any], payload: MemoryStoreRequest, topic_key: str) -> bool:
+    metadata = memory.get("metadata") or {}
+    return (
+        memory.get("type") == payload.type
+        and memory.get("source") == payload.source
+        and memory.get("user_id") == payload.user_id
+        and memory.get("team_id") == payload.team_id
+        and metadata.get("status", "active") != "inactive"
+        and (metadata.get("topic_key") in (None, topic_key))
+    )
+
+
+def _supersede_temp_memories(payload: MemoryStoreRequest, new_memory_id: str) -> list[str]:
+    if not _is_correction_memory(payload.content):
+        return []
+    topic_key = _topic_key(payload)
+    superseded_ids = []
+    for memory in temp_memory_storage:
+        if memory["id"] == new_memory_id:
+            continue
+        if _matching_topic_memory(memory, payload, topic_key):
+            memory_metadata = memory.setdefault("metadata", {})
+            memory_metadata["status"] = "inactive"
+            memory_metadata["topic_key"] = topic_key
+            memory_metadata["superseded_by"] = new_memory_id
+            superseded_ids.append(memory["id"])
+    return superseded_ids
+
+
+def _find_db_superseded_memories(db: Session, payload: MemoryStoreRequest) -> list[Memory]:
+    if not _is_correction_memory(payload.content):
+        return []
+    query = db.query(Memory).filter(Memory.type == payload.type, Memory.source == payload.source)
+    if payload.user_id is None:
+        query = query.filter(Memory.user_id.is_(None))
+    else:
+        query = query.filter(Memory.user_id == payload.user_id)
+    if payload.team_id is None:
+        query = query.filter(Memory.team_id.is_(None))
+    else:
+        query = query.filter(Memory.team_id == payload.team_id)
+
+    topic_key = _topic_key(payload)
+    candidates = []
+    for memory in query.all():
+        metadata = _metadata_from_json(memory.memory_metadata)
+        if metadata.get("status", "active") == "inactive":
+            continue
+        if metadata.get("topic_key") not in (None, topic_key):
+            continue
+        candidates.append(memory)
+    return candidates
+
+
+def _mark_db_superseded(db: Session, memories: list[Memory], new_memory_id: str, topic_key: str) -> None:
+    for memory in memories:
+        metadata = _metadata_from_json(memory.memory_metadata)
+        metadata["status"] = "inactive"
+        metadata["topic_key"] = topic_key
+        metadata["superseded_by"] = new_memory_id
+        memory.memory_metadata = _metadata_to_json(metadata)
+        memory.updated_at = datetime.now()
+    if memories:
+        db.commit()
+
+
 def _query_terms(query: str) -> list[str]:
     query_lower = query.lower()
     terms = re.findall(r"[a-z0-9_.:/-]+", query_lower)
@@ -105,6 +208,13 @@ def _query_terms(query: str) -> list[str]:
     return list(dict.fromkeys(term for term in terms if term))
 
 
+def _cjk_terms(query: str) -> list[str]:
+    cjk_text = "".join(re.findall(r"[\u4e00-\u9fff]+", query))
+    if len(cjk_text) < 2:
+        return [cjk_text] if cjk_text else []
+    return [cjk_text[index : index + 2] for index in range(len(cjk_text) - 1)]
+
+
 def _memory_search_score(memory: dict[str, Any], query: str) -> int:
     haystack = " ".join(
         [
@@ -116,6 +226,10 @@ def _memory_search_score(memory: dict[str, Any], query: str) -> int:
     query_lower = query.lower()
     if query_lower in haystack:
         return 100
+
+    cjk_score = sum(1 for term in _cjk_terms(query) if term and term in haystack)
+    if cjk_score:
+        return cjk_score
 
     terms = _query_terms(query)
     if not terms:
@@ -190,7 +304,9 @@ def _search_temp(
     results = [
         memory
         for memory in temp_memory_storage
-        if (not memory_type or memory.get("type") == memory_type) and _memory_search_score(memory, query) > 0
+        if _is_active_memory(memory)
+        and (not memory_type or memory.get("type") == memory_type)
+        and _memory_search_score(memory, query) > 0
     ]
     for memory in results[:limit]:
         memory["hit_count"] = memory.get("hit_count", 0) + 1
@@ -210,6 +326,7 @@ def _search_db(
 
         vector_memories = retriever.search_memories(db, query, limit, threshold=0.0)
         vector_results = [_memory_to_dict(memory) for memory in vector_memories]
+        vector_results = [memory for memory in vector_results if _is_active_memory(memory)]
     except Exception:
         vector_results = []
 
@@ -221,7 +338,11 @@ def _search_db(
     keyword_results = []
     for memory in db_query.all():
         memory_dict = _memory_to_dict(memory)
-        if memory_dict["id"] not in seen_ids and _memory_search_score(memory_dict, query) > 0:
+        if (
+            memory_dict["id"] not in seen_ids
+            and _is_active_memory(memory_dict)
+            and _memory_search_score(memory_dict, query) > 0
+        ):
             keyword_results.append(memory_dict)
 
     results = _sort_and_limit(vector_results + keyword_results, query, limit, directory)
@@ -236,14 +357,21 @@ def _search_db(
 @router.post("/", summary="保存记忆")
 def store_memory(memory_data: MemoryStoreRequest, db: Session = Depends(get_db)):
     if not _has_db(db):
-        memory = _memory_from_payload(memory_data)
+        prepared = _prepare_correction_metadata(memory_data, [])
+        memory = _memory_from_payload(prepared)
         temp_memory_storage.append(memory)
+        superseded_ids = _supersede_temp_memories(prepared, memory["id"])
+        if superseded_ids:
+            memory["metadata"]["supersedes"] = superseded_ids
         return memory
 
-    payload = SimpleNamespace(**memory_data.model_dump())
+    superseded_memories = _find_db_superseded_memories(db, memory_data)
+    prepared = _prepare_correction_metadata(memory_data, [memory.id for memory in superseded_memories])
+    payload = SimpleNamespace(**prepared.model_dump())
     from core import storage
 
     memory = storage.save_memory(db, payload)
+    _mark_db_superseded(db, superseded_memories, memory.id, _topic_key(prepared))
     return _memory_to_dict(memory)
 
 

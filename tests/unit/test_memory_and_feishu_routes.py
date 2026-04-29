@@ -73,6 +73,31 @@ def test_memory_retrieve_uses_search_logic():
     assert [item["content"] for item in results] == ["git status --short"]
 
 
+def test_memory_correction_supersedes_previous_same_topic_memory():
+    old_memory = memory.store_memory(
+        memory.MemoryStoreRequest(
+            content="以后周报发给 A：python scripts/send_weekly.py --to a@example.com",
+            type="周报发送命令",
+            source="cli",
+        )
+    )
+    new_memory = memory.store_memory(
+        memory.MemoryStoreRequest(
+            content="不对，以后周报发给 B：python scripts/send_weekly.py --to b@example.com",
+            type="周报发送命令",
+            source="cli",
+        )
+    )
+
+    results = memory.search_memories(query="发送周报", limit=5, type="周报发送命令")
+
+    assert [item["content"] for item in results] == [new_memory["content"]]
+    assert old_memory["metadata"]["status"] == "inactive"
+    assert old_memory["metadata"]["superseded_by"] == new_memory["id"]
+    assert new_memory["metadata"]["status"] == "active"
+    assert new_memory["metadata"]["supersedes"] == [old_memory["id"]]
+
+
 def test_memory_list_returns_recent_items():
     first = memory.store_memory(memory.MemoryStoreRequest(content="first", type="note"))
     second = memory.store_memory(memory.MemoryStoreRequest(content="second", type="note"))
