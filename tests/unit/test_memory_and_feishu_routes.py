@@ -7,11 +7,13 @@ import pytest
 from fastapi import HTTPException
 
 from backend.routers import memory
+from backend.routers import cli
 from backend.schemas.memory import MemoryCreate, MemoryRetrieveRequest
 
 
 def setup_function():
     memory.temp_memory_storage.clear()
+    cli.temp_command_storage.clear()
 
 
 def test_memory_extract_stores_memory():
@@ -175,3 +177,97 @@ def test_push_feishu_message_returns_ok():
     feishu = load_feishu_router(True)
 
     assert feishu.push_feishu_message("user-1", "hello") == {"status": "ok"}
+
+
+def test_feishu_decision_extract_stores_structured_project_decision():
+    feishu = load_feishu_router(True)
+
+    response = feishu.extract_and_store_decision(
+        feishu.DecisionExtractRequest(
+            content="@机器人 以后 project-a 统一用 prod 命名空间部署，不再使用 staging，因为 staging 经常误连测试资源",
+            chat_id="chat-1",
+            user_id="user-1",
+            message_id="msg-1",
+        )
+    )
+
+    assert response["status"] == "stored"
+    assert response["decision"]["project"] == "project-a"
+    assert response["decision"]["preferred_terms"] == ["prod"]
+    assert response["decision"]["rejected_terms"] == ["staging"]
+    assert response["memory"]["type"] == "project_decision"
+    assert response["memory"]["source"] == "feishu_group"
+    assert response["memory"]["metadata"]["topic_key"] == "decision:chat-1:project-a"
+
+
+def test_feishu_message_query_returns_cli_command_card():
+    feishu = load_feishu_router(True)
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(
+                command="kubectl rollout restart deploy/api-server -n prod",
+                count=4,
+                shell="bash",
+                directory="E:/workspace/project-a",
+                exit_code=0,
+            )
+        )
+    )
+
+    response = feishu.handle_feishu_message(
+        feishu.FeishuMessage(
+            content="谁知道 api-server 怎么重启？",
+            chat_id="chat-1",
+            mentioned=False,
+        )
+    )
+
+    assert response["action"] == "suggest_cards"
+    assert response["should_push"] is True
+    assert response["cards"][0]["card_type"] == "cli_command"
+    assert response["cards"][0]["command"] == "kubectl rollout restart deploy/api-server -n prod"
+
+
+def test_feishu_decision_reorders_cli_suggestions_by_team_policy():
+    feishu = load_feishu_router(True)
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(
+                command="kubectl apply -f k8s/staging.yaml",
+                count=10,
+                shell="bash",
+                directory="E:/workspace/project-a",
+            )
+        )
+    )
+    asyncio.run(
+        cli.record_command(
+            cli.CommandRecordRequest(
+                command="kubectl apply -f k8s/prod.yaml",
+                count=2,
+                shell="bash",
+                directory="E:/workspace/project-a",
+            )
+        )
+    )
+    feishu.extract_and_store_decision(
+        feishu.DecisionExtractRequest(
+            content="不对，project-a 以后统一用 prod 部署，不再使用 staging",
+            chat_id="chat-1",
+            user_id="lead-1",
+        )
+    )
+
+    response = asyncio.run(
+        cli.suggest_command(
+            cli.CommandSuggestRequest(
+                partial_command="kubectl apply",
+                directory="E:/workspace/project-a",
+            )
+        )
+    )
+
+    assert [item["command"] for item in response["suggestions"]] == [
+        "kubectl apply -f k8s/prod.yaml",
+        "kubectl apply -f k8s/staging.yaml",
+    ]

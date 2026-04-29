@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
 from backend.dependencies import init_database_schema
-from backend.routers import cli, memory
+from backend.routers import cli, feishu, memory
 
 load_dotenv()
 
@@ -14,6 +14,7 @@ app = FastAPI(
 # 注册路由
 app.include_router(cli.cli_router, prefix="/api/v1", tags=["CLI端对接"])
 app.include_router(memory.router, prefix="/api/v1/memory", tags=["记忆管理"])
+app.include_router(feishu.router, prefix="/api/v1", tags=["飞书协同记忆"])
 
 
 @app.on_event("startup")

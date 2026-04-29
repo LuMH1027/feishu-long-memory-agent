@@ -22,3 +22,19 @@
 # - 优先推荐：kubectl apply -f k8s/prod.yaml
 # - 降维甚至剔除：kubectl apply -f k8s/staging.yaml
 ```
+
+## 2026-04-29 实现记录
+
+本阶段已完成团队决策对 CLI 推荐排序的干预：
+
+1. `backend/routers/cli.py` 的 `/api/v1/cli/command/suggest` 会读取活跃的 `project_decision` 记忆。
+2. 当命令命中 `preferred_terms`，例如 `prod`，排序分提升。
+3. 当命令命中 `rejected_terms`，例如 `staging`，排序分降低。
+4. 该策略与原有 CLI 排序信号共同生效：
+   - 前缀匹配
+   - 目录上下文
+   - 团队决策偏好
+   - 执行成功率
+   - 使用频率
+   - 最近使用时间
+5. 已新增单元测试证明：即使 `staging` 命令历史使用次数更高，只要飞书决策声明 `prod` 替代 `staging`，`prod` 命令仍会在 `suggest` 中排到更前。

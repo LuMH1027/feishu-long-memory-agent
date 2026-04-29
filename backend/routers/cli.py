@@ -210,6 +210,51 @@ def _command_to_suggestion(memory: Memory) -> dict:
     }
 
 
+def _is_active_decision_metadata(metadata: dict) -> bool:
+    return metadata.get("status", "active") != "inactive"
+
+
+def _decision_applies_to_command(command: str, request: CommandSuggestRequest, metadata: dict) -> bool:
+    project = str(metadata.get("project") or "").lower()
+    topic = str(metadata.get("topic") or "").lower()
+    haystack = f"{command} {request.partial_command} {request.directory or ''}".lower()
+    return not project and not topic or (project and project in haystack) or (topic and topic in haystack)
+
+
+def _decision_policy_score(command: str, request: CommandSuggestRequest, decision_metadata_list: list[dict]) -> float:
+    command_lower = command.lower()
+    score = 0.0
+    for metadata in decision_metadata_list:
+        if not _is_active_decision_metadata(metadata):
+            continue
+        if not _decision_applies_to_command(command, request, metadata):
+            continue
+        preferred_terms = [str(term).lower() for term in metadata.get("preferred_terms", []) if term]
+        rejected_terms = [str(term).lower() for term in metadata.get("rejected_terms", []) if term]
+        if any(term and term in command_lower for term in preferred_terms):
+            score += 0.6
+        if any(term and term in command_lower for term in rejected_terms):
+            score -= 0.8
+    return score
+
+
+def _db_decision_metadata(db: Session) -> list[dict]:
+    decisions = db.query(Memory).filter(Memory.type == "project_decision").all()
+    return [_metadata_from_json(decision.memory_metadata) for decision in decisions]
+
+
+def _temp_decision_metadata() -> list[dict]:
+    try:
+        from backend.routers import memory
+    except Exception:
+        return []
+    return [
+        item.get("metadata") or {}
+        for item in memory.temp_memory_storage
+        if item.get("type") == "project_decision"
+    ]
+
+
 def _matches_partial_command(command: str, partial_command: str) -> bool:
     command_lower = command.lower()
     return all(token in command_lower for token in partial_command.lower().split())
@@ -220,23 +265,25 @@ def _matches_command_memory(command: str, metadata: dict, partial_command: str) 
     return all(token in haystack for token in partial_command.lower().split())
 
 
-def _suggestion_sort_key(memory: Memory, request: CommandSuggestRequest):
+def _suggestion_sort_key(memory: Memory, request: CommandSuggestRequest, decision_metadata_list: Optional[list[dict]] = None):
     metadata = _metadata_from_json(memory.memory_metadata)
     return (
         1 if memory.content.lower().startswith(request.partial_command.lower()) else 0,
         _metadata_directory_score(metadata, request.directory),
+        _decision_policy_score(memory.content, request, decision_metadata_list or []),
         _success_score(metadata),
         int(metadata.get("count", 0) or 0),
         metadata.get("last_used_at") or "",
     )
 
 
-def _temp_suggestion_sort_key(item: dict, request: CommandSuggestRequest):
+def _temp_suggestion_sort_key(item: dict, request: CommandSuggestRequest, decision_metadata_list: Optional[list[dict]] = None):
     metadata = item.get("metadata") or {}
     command = item.get("command", "")
     return (
         1 if command.lower().startswith(request.partial_command.lower()) else 0,
         _metadata_directory_score(metadata, request.directory),
+        _decision_policy_score(command, request, decision_metadata_list or []),
         _success_score(metadata),
         int(metadata.get("count", 0) or 0),
         metadata.get("last_used_at") or "",
@@ -272,22 +319,24 @@ async def suggest_command(request: CommandSuggestRequest, db: Session = Depends(
     """根据用户输入的部分命令，智能推荐完整命令"""
     if _has_db(db):
         memories = db.query(Memory).filter(Memory.type == "cli_command").all()
+        decision_metadata_list = _db_decision_metadata(db)
         results = [
             memory
             for memory in memories
             if _matches_command_memory(memory.content, _metadata_from_json(memory.memory_metadata), request.partial_command)
         ]
-        results.sort(key=lambda memory: _suggestion_sort_key(memory, request), reverse=True)
+        results.sort(key=lambda memory: _suggestion_sort_key(memory, request, decision_metadata_list), reverse=True)
         return {"suggestions": [_command_to_suggestion(memory) for memory in results]}
 
     # 搜索相关命令
+    decision_metadata_list = _temp_decision_metadata()
     results = [
         item for item in temp_command_storage 
         if _matches_command_memory(item["command"], item.get("metadata") or {}, request.partial_command)
     ]
     
     # 按使用频率排序
-    results.sort(key=lambda item: _temp_suggestion_sort_key(item, request), reverse=True)
+    results.sort(key=lambda item: _temp_suggestion_sort_key(item, request, decision_metadata_list), reverse=True)
     
     return {
         "suggestions": [
