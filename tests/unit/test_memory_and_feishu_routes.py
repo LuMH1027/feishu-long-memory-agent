@@ -329,3 +329,60 @@ def test_lark_cli_adapter_builds_official_send_command(monkeypatch):
         "json",
     ]
     assert calls[0][1]["timeout"] == 3
+
+
+def test_sdk_event_payload_converts_message_event():
+    from feishu_bot.sdk_events import event_to_message_payload
+
+    event = {
+        "event": {
+            "message": {
+                "content": "{\"text\":\"@机器人 project-a 怎么部署？\"}",
+                "chat_id": "oc_123",
+                "message_id": "om_123",
+            },
+            "sender": {"sender_id": {"user_id": "ou_123"}},
+        }
+    }
+
+    assert event_to_message_payload(event) == {
+        "content": "@机器人 project-a 怎么部署？",
+        "chat_id": "oc_123",
+        "message_id": "om_123",
+        "user_id": "ou_123",
+        "mentioned": True,
+        "source": "feishu_group",
+    }
+
+
+def test_sdk_event_posts_to_backend(monkeypatch):
+    from feishu_bot import sdk_events
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"action": "suggest_cards"}
+
+    def fake_post(url, json, timeout):
+        calls.append((url, json, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(sdk_events.requests, "post", fake_post)
+
+    response = sdk_events.post_message_to_backend(
+        {"content": "api-server 怎么重启？", "chat_id": "oc_123"},
+        backend_url="http://localhost:8000/",
+    )
+
+    assert response == {"action": "suggest_cards"}
+    assert calls == [
+        (
+            "http://localhost:8000/api/v1/feishu/message/analyze",
+            {"content": "api-server 怎么重启？", "chat_id": "oc_123"},
+            10,
+        )
+    ]
