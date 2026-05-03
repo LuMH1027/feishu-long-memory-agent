@@ -3,6 +3,9 @@ import os
 from typing import Any, Callable, Optional
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 MessageHandler = Callable[[dict[str, Any]], Any]

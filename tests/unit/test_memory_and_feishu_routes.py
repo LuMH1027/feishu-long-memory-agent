@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import os
 import sys
 import types
 
@@ -14,6 +15,7 @@ from backend.schemas.memory import MemoryCreate, MemoryRetrieveRequest
 def setup_function():
     memory.temp_memory_storage.clear()
     cli.temp_command_storage.clear()
+    os.environ.pop("FEISHU_AUTO_REPLY", None)
 
 
 def test_memory_extract_stores_memory():
@@ -277,7 +279,7 @@ def test_feishu_decision_reorders_cli_suggestions_by_team_policy():
     ]
 
 
-def test_feishu_auto_reply_uses_lark_cli_when_enabled(monkeypatch):
+def test_feishu_auto_reply_uses_sdk_sender_when_enabled(monkeypatch):
     feishu = load_feishu_router(True)
     sent = []
     monkeypatch.setenv("FEISHU_AUTO_REPLY", "true")
@@ -296,39 +298,90 @@ def test_feishu_auto_reply_uses_lark_cli_when_enabled(monkeypatch):
     assert sent == [("chat-1", "已记录团队决策：以后 project-a 统一用 prod 部署，不再使用 staging")]
 
 
-def test_lark_cli_adapter_builds_official_send_command(monkeypatch):
-    from feishu_bot import lark_cli
+def test_sdk_message_sender_builds_official_message_request(monkeypatch):
+    import importlib
 
     calls = []
 
-    class Completed:
-        returncode = 0
-        stdout = '{"ok": true}'
-        stderr = ""
+    class FakeResponse:
+        code = 0
+        msg = ""
+        data = types.SimpleNamespace(message_id="om_123")
 
-    def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
-        return Completed()
+        def success(self):
+            return True
 
-    monkeypatch.setattr(lark_cli.subprocess, "run", fake_run)
+    class FakeMessageApi:
+        def create(self, request):
+            calls.append(request)
+            return FakeResponse()
 
-    response = lark_cli.send_text_message("chat-1", "hello", cli_bin="lark-cli", timeout=3)
+    fake_client = types.SimpleNamespace(im=types.SimpleNamespace(v1=types.SimpleNamespace(message=FakeMessageApi())))
 
-    assert response["status"] == "ok"
-    assert calls[0][0] == [
-        "lark-cli",
-        "im",
-        "+messages-send",
-        "--as",
-        "bot",
-        "--chat-id",
-        "chat-1",
-        "--text",
-        "hello",
-        "--format",
-        "json",
+    class FakeCreateMessageRequestBody:
+        @classmethod
+        def builder(cls):
+            return FakeBuilder("body")
+
+    class FakeCreateMessageRequest:
+        @classmethod
+        def builder(cls):
+            return FakeBuilder("request")
+
+    class FakeBuilder:
+        def __init__(self, kind):
+            self.kind = kind
+            self.values = {}
+
+        def receive_id_type(self, value):
+            self.values["receive_id_type"] = value
+            return self
+
+        def request_body(self, value):
+            self.values["request_body"] = value
+            return self
+
+        def receive_id(self, value):
+            self.values["receive_id"] = value
+            return self
+
+        def msg_type(self, value):
+            self.values["msg_type"] = value
+            return self
+
+        def content(self, value):
+            self.values["content"] = value
+            return self
+
+        def build(self):
+            return {"kind": self.kind, **self.values}
+
+    fake_im_v1 = types.SimpleNamespace(
+        CreateMessageRequest=FakeCreateMessageRequest,
+        CreateMessageRequestBody=FakeCreateMessageRequestBody,
+    )
+    monkeypatch.setitem(sys.modules, "lark_oapi.api", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "lark_oapi.api.im", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "lark_oapi.api.im.v1", fake_im_v1)
+
+    from feishu_bot import sdk_messages
+
+    importlib.reload(sdk_messages)
+    response = sdk_messages.send_text_message("chat-1", "hello", client=fake_client)
+
+    assert response == {"status": "ok", "provider": "lark-oapi", "message_id": "om_123"}
+    assert calls == [
+        {
+            "kind": "request",
+            "receive_id_type": "chat_id",
+            "request_body": {
+                "kind": "body",
+                "receive_id": "chat-1",
+                "msg_type": "text",
+                "content": '{"text": "hello"}',
+            },
+        }
     ]
-    assert calls[0][1]["timeout"] == 3
 
 
 def test_sdk_event_payload_converts_message_event():

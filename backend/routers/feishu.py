@@ -246,9 +246,9 @@ def _send_group_text(chat_id: Optional[str], text: str) -> dict[str, Any]:
     if not chat_id:
         return {"status": "skipped", "reason": "缺少 chat_id"}
     try:
-        from feishu_bot.lark_cli import send_text_message
+        from feishu_bot.sdk_messages import send_text_message
     except Exception as exc:
-        return {"status": "error", "provider": "lark-cli", "message": str(exc)}
+        return {"status": "error", "provider": "lark-oapi", "message": str(exc)}
     return send_text_message(chat_id=chat_id, text=text)
 
 
@@ -375,7 +375,7 @@ async def feishu_event_callback(request: Request, db: Session = Depends(get_db))
 
 @router.post("/message/push")
 def push_feishu_message(user_id: str, content: str):
-    """使用 larksuite/cli 主动推送文本消息到飞书群。user_id 参数兼容旧接口，这里作为 chat_id 使用。"""
+    """使用飞书官方 SDK 主动推送文本消息到飞书群。user_id 参数兼容旧接口，这里作为 chat_id 使用。"""
     return _send_group_text(user_id, content)
 
 
