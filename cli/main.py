@@ -7,6 +7,7 @@ from pathlib import Path
 import configparser
 import json
 import subprocess
+import sys
 from collections import Counter
 from datetime import datetime
 
@@ -229,6 +230,9 @@ def search(
             typer.echo(f"   描述：{result.get('description', '无描述')}")
             typer.echo(f"   使用次数：{result.get('metadata', {}).get('count', 0)}")
 
+        if not sys.stdin.isatty():
+            return
+
         selected = typer.prompt(
             "\n请选择要执行/复制的命令序号（输入0退出）",
             type=int,
@@ -424,6 +428,31 @@ def save_workflow(
         typer.echo(f"✅ 工作流《{name}》已保存，包含{len(steps)}个步骤")
     except Exception as e:
         typer.echo(f"❌ 保存工作流失败: {str(e)}", err=True)
+
+
+@workflow_app.command("list")
+def list_workflows(limit: int = typer.Option(10, help="返回数量")):
+    """列出已保存的工作流"""
+    try:
+        response = _request("GET", "/cli/command/list", params={"limit": limit, "type": "cli_workflow"})
+        response.raise_for_status()
+        workflows = response.json()
+        if not workflows:
+            typer.echo("暂无工作流")
+            return
+        for wf in workflows:
+            content = wf.get("content", "")
+            try:
+                data = json.loads(content)
+                name = data.get("name", "未知")
+                steps = data.get("steps", [])
+                typer.echo(f"📋 {name} ({len(steps)} 步)")
+                for i, s in enumerate(steps, 1):
+                    typer.echo(f"   {i}. {s}")
+            except json.JSONDecodeError:
+                typer.echo(f"📋 {content[:60]}")
+    except Exception as e:
+        typer.echo(f"❌ 获取工作流失败: {str(e)}", err=True)
 
 
 @workflow_app.command("run")

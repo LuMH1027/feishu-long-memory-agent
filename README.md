@@ -1,141 +1,187 @@
-# 🧠 企业级记忆引擎 (Enterprise Memory Engine)
+# 企业级记忆引擎
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-blue.svg" alt="Python Version">
-  <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
-  <img src="https://img.shields.io/badge/Status-Active-brightgreen.svg" alt="Status">
-</p>
+一个跨越 CLI 与飞书的统一记忆系统，帮助开发者和团队沉淀、唤醒、复用碎片化知识。
 
-> **一个能跨越CLI与飞书，沉淀、唤醒、复用碎片化知识的“外置大脑”。**
+## 核心能力
 
----
+- **CLI 记忆引擎** — 自然语言搜索命令、前缀推荐、矛盾自动更新、工作流编排
+- **飞书团队记忆** — 群聊决策自动抽取、智能路由、卡片推送、跨消息矛盾检测
+- **跨域联动** — 飞书决策影响 CLI 推荐，CLI 命令可被飞书查询
+- **混合存储** — SQLite 关系库 + ChromaDB 向量库，语义搜索 + 关键词匹配双通道
 
-## 🤯 痛点：我们是否在“集体失忆”？
+## 架构
 
-在日常的开发与协作中，有价值的信息正在不断流失：
-
-- **对于开发者**: 那些复杂的、偶尔使用的、与特定项目相关的**命令行**，你是否需要反复查阅笔记或 `history`？
-- **对于团队**: 那些在**飞书群聊**中一闪而过的关键决策、技术方案、客户反馈，是否在一周后就无人记起，导致重复讨论和无效沟通？
-
-信息被隔离在不同的工具中，并随着时间被遗忘。我们正在为此付出高昂的效率成本。
-
-## 💡 方案：构建一个记忆引擎
-
-本项目旨在构建一个统一的记忆引擎，通过不同的“探针”捕获信息，经过智能处理后存入“记忆宫殿”，并在最需要的时刻被主动唤醒。
-
-```mermaid
-graph LR
-    subgraph A[信息捕获层]
-        direction LR
-        A1(CLI客户端) --> B
-        A2(飞书机器人) --> B
-    end
-    subgraph B[记忆引擎核心]
-        direction TB
-        B1{核心API} --> B2[提取/检索/更新]
-        B2 <--> B3[(混合数据库)]
-    end
-    subgraph C[知识应用层]
-        direction LR
-        B --> C1(CLI智能推荐)
-        B --> C2(飞书主动提醒)
-    end
+```
+┌─────────────────────────────────────────────────────┐
+│                    信息捕获层                         │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐      │
+│   │ CLI 客户端 │    │ 飞书机器人 │    │ API 接口  │      │
+│   └─────┬────┘    └─────┬────┘    └─────┬────┘      │
+│         └───────────────┼───────────────┘            │
+│                         ▼                            │
+│              ┌──────────────────┐                    │
+│              │   记忆引擎核心    │                    │
+│              │  ┌────────────┐  │                    │
+│              │  │ 决策提取器  │  │  ← LLM + 正则双保险 │
+│              │  │ 矛盾检测器  │  │                    │
+│              │  │ 语义检索器  │  │                    │
+│              │  └────────────┘  │                    │
+│              │         ▼        │                    │
+│              │  ┌────────────┐  │                    │
+│              │  │ 混合数据库  │  │  ← SQLite + ChromaDB│
+│              │  └────────────┘  │                    │
+│              └──────────────────┘                    │
+│                         ▼                            │
+│              ┌──────────────────┐                    │
+│              │    知识应用层     │                    │
+│              │  CLI 智能推荐    │                    │
+│              │  飞书卡片推送    │                    │
+│              └──────────────────┘                    │
+└─────────────────────────────────────────────────────┘
 ```
 
-## 🚀 快速上手 (Quick Start)
+## 快速开始
 
-只需3个步骤，即可在本地运行并使用记忆引擎。
+### 环境要求
 
-### 1. 环境准备
-
-- Python 3.10+ & Pip
+- Python 3.10+
 - Git
 
-### 2. 安装与配置
+### 安装
 
 ```bash
-# 克隆项目到本地
-git clone <your-repo-url>
+git clone <repo-url>
 cd feishu-long-memory-agent
-
-# 安装项目本身及所有依赖
-# '-e' 表示可编辑模式，你的代码修改会立刻生效
 pip install -e .
-
-# [重要] 为全局 mem 命令配置后端地址（首次使用需要）
-mem configure
-# > 根据提示输入后端API地址，默认为 http://localhost:8000/api/v1
 ```
 
-### 3. 启动服务
+### 配置
+
+复制并编辑环境变量：
 
 ```bash
-# (可选) 如果你修改了.env.example, 复制一份
-# cp .env.example .env
+cp .env.example .env
+```
 
-# 初始化数据库（首次运行需要）
+`.env` 中需要配置：
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `OPENAI_API_KEY` | Embedding/LLM API Key | `sk-xxx` |
+| `OPENAI_BASE_URL` | API 地址（支持第三方代理） | `https://api.siliconflow.cn/v1` |
+| `EMBEDDING_MODEL` | Embedding 模型 | `BAAI/bge-m3` |
+| `LLM_MODEL` | LLM 模型 | `Qwen3-VL-8B-Instruct` |
+| `FEISHU_APP_ID` | 飞书应用 ID（可选） | `cli_xxx` |
+| `FEISHU_APP_SECRET` | 飞书应用密钥（可选） | `xxx` |
+
+### 启动
+
+```bash
+# 初始化数据库
 python init_db.py
 
-# 启动后端API服务
+# 启动后端
 uvicorn backend.main:app --reload --port 8000
+
+# 配置 CLI（另一个终端）
+mem configure
+# 输入: http://127.0.0.1:8000/api/v1
 ```
 
-服务启动后，你就可以在**任意终端**使用 `mem` 命令，或在飞书中与机器人互动了。
+## 使用指南
 
-## � 使用指南 (Usage)
-
-### CLI端：开发者的“第二大脑”
-
-`mem` 命令现在是你的全局效率工具。
+### CLI 命令
 
 ```bash
-# 场景1: 记住一个复杂的命令，并打上标签
-mem memorize "docker run -p 8080:80 -v /data:/app/data --name webapp my-image:1.2" --type "docker启动命令"
+# 记忆命令
+mem memorize "docker run -p 8080:80 --name webapp my-image:1.2" --type "docker启动命令"
 
-# 场景2: 当忘记时，通过自然语言模糊搜索
+# 语义搜索（自然语言）
 mem search "启动webapp容器"
 
-# 场景3: 查看最近记住的所有内容
-mem list
+# 前缀推荐
+mem suggest "docker" --limit 5
 
-# 场景4: 清空所有记忆
-mem clear
+# 列出所有记忆
+mem list --limit 20
+
+# 保存工作流
+mem workflow save "生产健康检查" "docker ps -a" "kubectl get pods -n prod"
+
+# 执行工作流
+mem workflow run "生产健康检查"
 ```
 
-### 飞书端：团队的“决策账本”
+### 飞书机器人
 
-1.  **储存决策**
-    - **你** (在群聊中): `@记忆机器人 记住，alpha版的发布日期最终定在5月10日。`
-    - **机器人** (自动回复): `好的，我记住了：alpha版发布日期 -> 5月10日。`
+在群聊中 @机器人 发送消息，系统会自动判断消息类型：
 
-2.  **自动唤醒**
-    - **同事** (几天后在群聊中): `我们项目啥时候发版来着？`
-    - **机器人** (主动推送卡片): 
-        > **历史决策提醒**
-        > **主题**: alpha版发布日期
-        > **结论**: 5月10日
-        > **记录时间**: 2024-05-01
+| 消息类型 | 示例 | 机器人行为 |
+|---------|------|-----------|
+| 决策消息 | `以后统一用 Jest 做单元测试` | 提取决策 → 入库 → 推送蓝色卡片 |
+| 查询消息 | `之前用什么部署环境？` | 检索相关记忆 → 推送卡片 |
+| 矛盾更新 | `更正，以后用 prod 不用 staging` | 覆盖旧决策 → 推送更新卡片 |
+| 普通消息 | `今天天气不错` | 忽略，不回复 |
 
-## 🛠️ 技术内幕 (Under the Hood)
+### 飞书决策卡片
 
-- **后端**: FastAPI, Uvicorn
-- **数据存储**: SQLAlchemy, ChromaDB (向量库), SQLite/PostgreSQL
-- **AI能力**: LangChain, OpenAI API
-- **CLI**: Typer
-- **飞书集成**: 官方 Python SDK
+机器人会推送结构化的决策卡片，包含：
 
-项目采用分层解耦架构，核心业务逻辑与接入端无关，具备高度可扩展性，为未来接入更多记忆场景（如个人偏好学习、知识遗忘预警）奠定了坚实基础。
+- 决策主题和结论
+- 推荐方案 / 废弃方案
+- 相关项目和截止日期
+- 记录时间
 
-## 🤝 贡献与开发
+## 技术栈
 
-我们欢迎任何形式的贡献！无论是功能建议、Bug修复还是文档改进。
+| 层级 | 技术 |
+|------|------|
+| 后端框架 | FastAPI + Uvicorn |
+| 关系存储 | SQLAlchemy + SQLite |
+| 向量存储 | ChromaDB（余弦相似度） |
+| Embedding | BAAI/bge-m3（1024 维） |
+| LLM | Qwen3-VL-8B-Instruct |
+| CLI | Typer |
+| 飞书集成 | lark-oapi（官方 Python SDK） |
 
-1.  Fork 本仓库
-2.  创建你的特性分支 (`git checkout -b feature/AmazingFeature`)
-3.  提交你的修改 (`git commit -m 'Add some AmazingFeature'`)
-4.  推送到分支 (`git push origin feature/AmazingFeature`)
-5.  发起一个 Pull Request
+## 项目结构
 
-## 📄 许可证
+```
+├── backend/            # FastAPI 后端
+│   ├── main.py         # 应用入口
+│   ├── routers/        # API 路由（CLI、飞书、健康检查）
+│   └── dependencies.py # 依赖注入
+├── cli/                # Typer CLI 客户端
+│   └── main.py         # mem 命令定义
+├── core/               # 核心业务逻辑
+│   ├── storage.py      # 记忆存储（关系库 + 向量库）
+│   ├── retriever.py    # 语义检索
+│   ├── decision_extractor.py  # 决策提取（LLM + 正则）
+│   └── command_parser.py      # 命令解析
+├── db/                 # 数据层
+│   ├── relational/     # SQLAlchemy 模型
+│   └── vector/         # ChromaDB 客户端
+├── feishu_bot/         # 飞书机器人
+│   ├── sdk_events.py   # WebSocket 事件处理
+│   ├── sdk_messages.py # 消息发送（文本/卡片）
+│   └── card_templates.py # 卡片模板
+├── demo/               # 演示脚本和素材
+├── scripts/            # 工具脚本
+└── tests/              # 测试
+```
 
-本项目采用 [MIT](LICENSE) 许可证。
+## Demo 演示
+
+```bash
+# 全自动日志（截图友好，一条命令跑完 12 步）
+python demo/auto_log.py --reset-db
+
+# 交互式录屏（有暂停提示，适合录视频）
+python demo/demo_record.py --reset-db
+```
+
+详见 [demo/README.md](demo/README.md)。
+
+## 许可证
+
+MIT

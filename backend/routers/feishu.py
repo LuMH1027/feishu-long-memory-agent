@@ -133,7 +133,7 @@ def _extract_reason(content: str) -> Optional[str]:
 def _extract_preferred_terms(content: str) -> list[str]:
     terms: list[str] = []
     for pattern in (
-        r"(?:统一用|统一使用|以后用|以后统一用|采用|改成|换成)\s*([a-zA-Z0-9_\-./:]+)",
+        r"(?:统一用|统一使用|以后\S{0,4}?用|采用|改成|换成)\s*([a-zA-Z0-9_\-./:]+)",
         r"(?:发给)\s*([a-zA-Z0-9_.@-]+)",
     ):
         terms.extend(match.group(1) for match in re.finditer(pattern, content, re.IGNORECASE))

@@ -35,12 +35,21 @@ def event_to_message_payload(event: Any) -> dict[str, Any]:
     sender = _get_attr(event_body, "sender", {})
     sender_id = _get_attr(sender, "sender_id", {})
 
+    # 检测消息中是否 @了机器人
+    raw_content = _get_attr(message, "content", "") or ""
+    mentioned = False
+    try:
+        parsed = json.loads(raw_content)
+        mentioned = bool(parsed.get("mentions"))
+    except (TypeError, ValueError):
+        pass
+
     return {
         "content": _message_text(message),
         "chat_id": _get_attr(message, "chat_id"),
         "message_id": _get_attr(message, "message_id"),
         "user_id": _get_attr(sender_id, "user_id") or _get_attr(sender_id, "open_id"),
-        "mentioned": True,
+        "mentioned": mentioned,
         "source": "feishu_group",
     }
 

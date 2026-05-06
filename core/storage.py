@@ -75,7 +75,7 @@ def save_memory(db: Session, memory_data):
     vector_status = "skipped"
     try:
         embedding = get_embedding(memory_data.content)
-        # ChromaDB metadata 不接受 None 值，转换为空字符串
+        # ChromaDB metadata 只接受 str/int/float/bool，过滤掉 None/list/dict
         raw_meta = {
             "type": memory_data.type,
             "source": memory_data.source,
@@ -83,7 +83,16 @@ def save_memory(db: Session, memory_data):
             "team_id": memory_data.team_id,
             **metadata,
         }
-        vector_meta = {k: (v if v is not None else "") for k, v in raw_meta.items()}
+        vector_meta = {}
+        for k, v in raw_meta.items():
+            if v is None:
+                vector_meta[k] = ""
+            elif isinstance(v, (list, dict)):
+                vector_meta[k] = json.dumps(v, ensure_ascii=False)
+            elif isinstance(v, (str, int, float, bool)):
+                vector_meta[k] = v
+            else:
+                vector_meta[k] = str(v)
         vector_client.add_memory(
             memory_id=memory_id,
             content=memory_data.content,
