@@ -12,7 +12,15 @@
       "Bash(pytest tests/unit/test_core_components.py -v)",
       "Bash(pytest tests/unit/test_core_components.py -q -p no:cacheprovider)",
       "Bash(python)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests -q -p no:cacheprovider --tb=short)",
+      "Bash(where python *)",
+      "Bash(D:/anaconda3/python.exe -m pytest tests -q -p no:cacheprovider --tb=short)",
+      "Bash(D:/anaconda3/python.exe -m pytest tests -q -p no:cacheprovider --tb=line)",
+      "Bash(D:/anaconda3/python.exe -c ' *)",
+      "Bash(D:/anaconda3/python.exe -m pytest tests -v -p no:cacheprovider --tb=no)",
+      "Bash(D:/anaconda3/python.exe -m pytest tests -v -p no:cacheprovider --tb=no --ignore=tests/test_chroma.py)",
+      "Bash(D:/anaconda3/python.exe -m pytest tests -q -p no:cacheprovider --tb=short --ignore=tests/test_chroma.py)"
     ]
   }
 }
