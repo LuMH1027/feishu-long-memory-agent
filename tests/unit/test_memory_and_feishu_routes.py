@@ -281,9 +281,9 @@ def test_feishu_decision_reorders_cli_suggestions_by_team_policy():
 
 def test_feishu_auto_reply_uses_sdk_sender_when_enabled(monkeypatch):
     feishu = load_feishu_router(True)
-    sent = []
+    sent_cards = []
     monkeypatch.setenv("FEISHU_AUTO_REPLY", "true")
-    monkeypatch.setattr(feishu, "_send_group_text", lambda chat_id, text: sent.append((chat_id, text)) or {"status": "ok"})
+    monkeypatch.setattr(feishu, "_send_group_card", lambda chat_id, card, fallback_text=None: sent_cards.append((chat_id, card, fallback_text)) or {"status": "ok"})
 
     response = feishu.handle_feishu_message(
         feishu.FeishuMessage(
@@ -295,7 +295,12 @@ def test_feishu_auto_reply_uses_sdk_sender_when_enabled(monkeypatch):
 
     assert response["action"] == "decision_stored"
     assert response["reply"] == {"status": "ok"}
-    assert sent == [("chat-1", "已记录团队决策：以后 project-a 统一用 prod 部署，不再使用 staging")]
+    assert len(sent_cards) == 1
+    assert sent_cards[0][0] == "chat-1"
+    # 验证卡片包含正确的header
+    card = sent_cards[0][1]
+    assert "header" in card
+    assert "团队决策" in card["header"]["title"]["content"]
 
 
 def test_sdk_message_sender_builds_official_message_request(monkeypatch):

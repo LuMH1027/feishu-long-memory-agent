@@ -277,7 +277,61 @@ def suggest(
             if command:
                 typer.echo(command)
     except Exception as e:
-        typer.echo(f"鉂?鎺ㄨ崘澶辫触: {str(e)}", err=True)
+        typer.echo(f"推荐失败: {str(e)}", err=True)
+
+
+# --- Completion 子命令 ---
+completion_app = typer.Typer(help="管理shell补全")
+app.add_typer(completion_app, name="completion")
+
+
+@completion_app.command("install")
+def completion_install(
+    shell: Optional[str] = typer.Option(None, help="Shell类型：powershell/bash/zsh（自动检测）"),
+    force: bool = typer.Option(False, help="强制覆盖已有脚本"),
+):
+    """安装shell补全脚本"""
+    from cli.completion import install_completion, get_setup_instructions
+
+    result = install_completion(shell_type=shell, force=force)
+
+    if result["status"] == "ok":
+        typer.echo(f"✅ {result['message']}")
+        typer.echo(f"\n激活命令: {result['activate_command']}")
+        typer.echo("\n要永久激活，请将激活命令添加到shell配置文件中。")
+        typer.echo("\n详细说明:")
+        typer.echo(get_setup_instructions(shell))
+    elif result["status"] == "skipped":
+        typer.echo(f"⚠️ {result['message']}")
+        typer.echo(f"提示: {result.get('hint', '')}")
+    else:
+        typer.echo(f"❌ 安装失败: {result.get('message', '未知错误')}", err=True)
+
+
+@completion_app.command("uninstall")
+def completion_uninstall(
+    shell: Optional[str] = typer.Option(None, help="Shell类型：powershell/bash/zsh（自动检测）"),
+):
+    """卸载shell补全脚本"""
+    from cli.completion import uninstall_completion
+
+    result = uninstall_completion(shell_type=shell)
+
+    if result["status"] == "ok":
+        typer.echo(f"✅ {result['message']}")
+    else:
+        typer.echo(f"⚠️ {result['message']}")
+
+
+@completion_app.command("show")
+def completion_show(
+    shell: Optional[str] = typer.Option(None, help="Shell类型：powershell/bash/zsh（自动检测）"),
+):
+    """显示补全脚本内容"""
+    from cli.completion import get_completion_script
+
+    script = get_completion_script(shell)
+    typer.echo(script)
 
 
 @app.command()
@@ -403,7 +457,17 @@ def clear(force: bool = False):
         confirm = typer.confirm("确定要清空所有记忆吗？此操作不可恢复！")
         if not confirm:
             return
-    typer.echo("✅ 记忆已清空")
+
+    try:
+        response = _request("DELETE", "/memory/")
+        response.raise_for_status()
+        result = response.json()
+        deleted_count = result.get("deleted_count", 0)
+        typer.echo(f"✅ {result.get('message', f'已清空 {deleted_count} 条记忆')}")
+    except requests.RequestException as e:
+        typer.echo(f"❌ 清空失败: {str(e)}", err=True)
+    except Exception as e:
+        typer.echo(f"❌ 清空失败: {str(e)}", err=True)
 
 if __name__ == "__main__":
     app()

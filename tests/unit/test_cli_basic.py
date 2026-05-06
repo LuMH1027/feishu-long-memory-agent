@@ -210,11 +210,32 @@ def test_clear_requires_confirmation():
     result = runner.invoke(cli_main.app, ["clear"], input="n\n")
 
     assert result.exit_code == 0
-    assert "✅ 记忆已清空" not in result.output
+    assert "✅" not in result.output
 
 
-def test_clear_force_skips_confirmation():
+def test_clear_force_skips_confirmation(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        cli_main,
+        "_request",
+        lambda method, path, **kwargs: calls.append((method, path, kwargs))
+        or FakeResponse({"status": "ok", "message": "已清空 5 条记忆", "deleted_count": 5}),
+    )
+
     result = runner.invoke(cli_main.app, ["clear", "--force"])
 
     assert result.exit_code == 0
-    assert "✅ 记忆已清空" in result.output
+    assert calls == [("DELETE", "/memory/", {})]
+    assert "已清空 5 条记忆" in result.output
+
+
+def test_clear_handles_request_error(monkeypatch):
+    def failing_request(method, path, **kwargs):
+        raise cli_main.requests.ConnectionError("offline")
+
+    monkeypatch.setattr(cli_main, "_request", failing_request)
+
+    result = runner.invoke(cli_main.app, ["clear", "--force"])
+
+    assert result.exit_code == 0
+    assert "❌ 清空失败: offline" in result.output

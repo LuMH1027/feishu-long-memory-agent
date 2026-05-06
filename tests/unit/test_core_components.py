@@ -96,7 +96,7 @@ def test_save_memory_persists_relational_and_vector_records(monkeypatch):
     assert saved.content == "remember cli command"
     assert saved.type == "cli_command"
     assert db.added == [saved]
-    assert db.commits == 1
+    assert db.commits == 2  # 一次保存记忆，一次更新vector_status
     assert db.refreshed == [saved]
     assert vector_calls == [
         {
@@ -161,7 +161,7 @@ def test_delete_memory_is_noop_when_missing(monkeypatch):
     db = FakeDB(query_result=None)
     monkeypatch.setattr(storage, "vector_client", SimpleNamespace(delete_memory=pytest.fail))
 
-    assert storage.delete_memory(db, "missing") is True
+    assert storage.delete_memory(db, "missing") is False
     assert db.deleted == []
     assert db.commits == 0
 

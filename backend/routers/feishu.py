@@ -150,6 +150,63 @@ def _extract_rejected_terms(content: str) -> list[str]:
     return list(dict.fromkeys(term for term in terms if term))
 
 
+
+def _extract_deadline(content: str) -> Optional[str]:
+    """从消息中提取截止日期"""
+    from datetime import datetime, timedelta
+    
+    # 明确日期模式
+    date_patterns = [
+        (r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})', 3),
+        (r'(\d{1,2})月(\d{1,2})[日号]', 2),
+        (r'截止[日时]?[期是]?[:：]?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})', 1),
+        (r'[Dd]eadline[:：]?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})', 1),
+    ]
+    
+    for pattern, group_count in date_patterns:
+        match = re.search(pattern, content)
+        if match:
+            try:
+                if group_count == 3:
+                    year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                    if 2020 <= year <= 2030 and 1 <= month <= 12 and 1 <= day <= 31:
+                        return f"{year}-{month:02d}-{day:02d}"
+                elif group_count == 2:
+                    month, day = int(match.group(1)), int(match.group(2))
+                    if 1 <= month <= 12 and 1 <= day <= 31:
+                        year = datetime.now().year
+                        return f"{year}-{month:02d}-{day:02d}"
+                elif group_count == 1:
+                    date_str = match.group(1)
+                    parts = re.split(r'[-/]', date_str)
+                    if len(parts) == 3:
+                        year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                        if 2020 <= year <= 2030 and 1 <= month <= 12 and 1 <= day <= 31:
+                            return f"{year}-{month:02d}-{day:02d}"
+            except (ValueError, IndexError):
+                pass
+    
+    # 相对日期
+    if '明天' in content:
+        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    elif '后天' in content:
+        return (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    
+    weekday_match = re.search(r'下周([一二三四五六日天])', content)
+    if weekday_match:
+        weekday_map = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
+        char = weekday_match.group(1)
+        if char in weekday_map:
+            today = datetime.now()
+            days_ahead = weekday_map[char] - today.weekday() + 7
+            return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+    
+    days_match = re.search(r'(\d+)天后', content)
+    if days_match:
+        return (datetime.now() + timedelta(days=int(days_match.group(1)))).strftime("%Y-%m-%d")
+    
+    return None
+
 def _topic_key(project: Optional[str], content: str, chat_id: Optional[str]) -> str:
     if project:
         return f"decision:{chat_id or 'global'}:{project.lower()}"
@@ -165,6 +222,7 @@ def extract_decision(content: str, chat_id: Optional[str] = None) -> dict[str, A
     reason = _extract_reason(cleaned)
     preferred_terms = _extract_preferred_terms(cleaned)
     rejected_terms = _extract_rejected_terms(cleaned)
+    deadline = _extract_deadline(cleaned)
     topic = project or "团队决策"
     conclusion = cleaned.rstrip("。")
 
@@ -180,46 +238,61 @@ def extract_decision(content: str, chat_id: Optional[str] = None) -> dict[str, A
 
 
 def _memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
-    metadata = item.get("metadata") or {}
-    if item.get("type") == "cli_workflow":
+    """将记忆数据转换为飞书交互卡片"""
+    try:
+        from feishu_bot.card_templates import memory_to_card
+        return memory_to_card(item)
+    except Exception:
+        # 降级为简单字典格式
+        metadata = item.get("metadata") or {}
+        if item.get("type") == "cli_workflow":
+            return {
+                "card_type": "workflow",
+                "title": f"工作流：{metadata.get('name') or item.get('description') or item.get('content')}",
+                "summary": item.get("description") or "历史工作流",
+                "steps": metadata.get("steps", []),
+                "source": item.get("source"),
+                "memory_id": item.get("id"),
+            }
+        if item.get("type") == "cli_command":
+            return {
+                "card_type": "cli_command",
+                "title": "历史 CLI 命令",
+                "command": item.get("content"),
+                "usage_count": metadata.get("count", 0),
+                "success_count": metadata.get("success_count", 0),
+                "directory": metadata.get("directory"),
+                "source": item.get("source"),
+                "memory_id": item.get("id"),
+            }
         return {
-            "card_type": "workflow",
-            "title": f"工作流：{metadata.get('name') or item.get('description') or item.get('content')}",
-            "summary": item.get("description") or "历史工作流",
-            "steps": metadata.get("steps", []),
+            "card_type": "decision",
+            "title": metadata.get("topic") or item.get("type"),
+            "summary": metadata.get("conclusion") or item.get("content"),
+            "reason": metadata.get("reason"),
+            "project": metadata.get("project"),
+            "preferred_terms": metadata.get("preferred_terms", []),
+            "rejected_terms": metadata.get("rejected_terms", []),
             "source": item.get("source"),
             "memory_id": item.get("id"),
         }
-    if item.get("type") == "cli_command":
-        return {
-            "card_type": "cli_command",
-            "title": "历史 CLI 命令",
-            "command": item.get("content"),
-            "usage_count": metadata.get("count", 0),
-            "success_count": metadata.get("success_count", 0),
-            "directory": metadata.get("directory"),
-            "source": item.get("source"),
-            "memory_id": item.get("id"),
-        }
-    return {
-        "card_type": "decision",
-        "title": metadata.get("topic") or item.get("type"),
-        "summary": metadata.get("conclusion") or item.get("content"),
-        "reason": metadata.get("reason"),
-        "project": metadata.get("project"),
-        "preferred_terms": metadata.get("preferred_terms", []),
-        "rejected_terms": metadata.get("rejected_terms", []),
-        "source": item.get("source"),
-        "memory_id": item.get("id"),
-    }
 
 
 def _cards_to_text(cards: list[dict[str, Any]]) -> str:
+    """将卡片列表转换为纯文本（降级方案）"""
     if not cards:
         return "没有找到相关团队记忆。"
 
     lines = ["找到以下团队记忆："]
     for index, card in enumerate(cards, start=1):
+        # 如果是飞书交互卡片格式
+        if "header" in card:
+            header = card.get("header", {})
+            title = header.get("title", {}).get("content", "未知")
+            lines.append(f"{index}. {title}")
+            continue
+
+        # 降级格式
         card_type = card.get("card_type")
         if card_type == "cli_command":
             lines.append(f"{index}. 历史 CLI 命令：{card.get('command')}")
@@ -243,6 +316,7 @@ def _cards_to_text(cards: list[dict[str, Any]]) -> str:
 
 
 def _send_group_text(chat_id: Optional[str], text: str) -> dict[str, Any]:
+    """发送纯文本消息到群聊"""
     if not chat_id:
         return {"status": "skipped", "reason": "缺少 chat_id"}
     try:
@@ -252,12 +326,61 @@ def _send_group_text(chat_id: Optional[str], text: str) -> dict[str, Any]:
     return send_text_message(chat_id=chat_id, text=text)
 
 
+def _send_group_card(chat_id: Optional[str], card: dict[str, Any], fallback_text: Optional[str] = None) -> dict[str, Any]:
+    """发送交互卡片消息到群聊，失败时降级为文本"""
+    if not chat_id:
+        return {"status": "skipped", "reason": "缺少 chat_id"}
+    try:
+        from feishu_bot.sdk_messages import send_card_message
+        return send_card_message(chat_id=chat_id, card=card, fallback_text=fallback_text)
+    except Exception as exc:
+        # 降级为文本消息
+        if fallback_text:
+            return _send_group_text(chat_id, fallback_text)
+        return {"status": "error", "provider": "lark-oapi", "message": str(exc)}
+
+
 def _auto_reply_enabled() -> bool:
     return os.getenv("FEISHU_AUTO_REPLY", "").lower() in {"1", "true", "yes", "on"}
 
 
+def _use_llm_extraction() -> bool:
+    """检查是否使用LLM抽取"""
+    return os.getenv("USE_LLM_DECISION_EXTRACTION", "").lower() in {"1", "true", "yes", "on"}
+
+
 def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict[str, Any]:
+    # 尝试使用LLM抽取，失败时降级为规则抽取
+    use_llm = _use_llm_extraction()
+
+    if use_llm:
+        try:
+            from core.decision_extractor import extract_decision_with_rules_fallback
+            llm_result = extract_decision_with_rules_fallback(request.content, use_llm=True)
+
+            if llm_result.get("is_decision"):
+                # 使用LLM结果
+                decision = {
+                    "topic": llm_result.get("topic", "未知主题"),
+                    "conclusion": llm_result.get("conclusion", request.content),
+                    "reason": llm_result.get("reason"),
+                    "project": llm_result.get("project"),
+                    "preferred_terms": llm_result.get("preferred_terms", []),
+                    "rejected_terms": llm_result.get("rejected_terms", []),
+                    "topic_key": _topic_key(llm_result.get("project"), request.content, request.chat_id),
+                    "llm_confidence": llm_result.get("confidence", 0.0),
+                    "deadline": llm_result.get("deadline"),
+                }
+            else:
+                # LLM判断不是决策
+                return {"status": "ignored", "reason": "LLM判断不是决策消息", "confidence": llm_result.get("confidence", 0.0)}
+        except Exception:
+            # LLM失败，降级为规则抽取
+            pass
+
+    # 使用规则抽取
     decision = extract_decision(request.content, request.chat_id)
+
     metadata = {
         **request.metadata,
         **decision,
@@ -265,6 +388,7 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
         "message_id": request.message_id,
         "status": "active",
         "extracted_at": datetime.now().isoformat(),
+        "extraction_method": "llm" if use_llm and decision.get("llm_confidence") else "rules",
     }
     stored = memory.store_memory(
         memory.MemoryStoreRequest(
@@ -289,6 +413,7 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
                     conclusion=decision["conclusion"],
                     reason=decision.get("reason"),
                     related_persons=request.user_id,
+                    deadline=decision.get("deadline"),
                 )
             )
             db.commit()
@@ -410,14 +535,31 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
         )
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
         if _auto_reply_enabled():
-            reply = _send_group_text(message.chat_id, f"已记录团队决策：{stored['decision']['conclusion']}")
+            # 发送决策卡片
+            decision = stored.get("decision", {})
+            from feishu_bot.card_templates import decision_card
+            card = decision_card(
+                topic=decision.get("topic", "未知主题"),
+                conclusion=decision.get("conclusion", ""),
+                reason=decision.get("reason"),
+                project=decision.get("project"),
+                preferred_terms=decision.get("preferred_terms", []),
+                rejected_terms=decision.get("rejected_terms", []),
+                created_at=datetime.now().isoformat(),
+                memory_id=stored.get("memory", {}).get("id")
+            )
+            fallback_text = f"已记录团队决策：{stored['decision']['conclusion']}"
+            reply = _send_group_card(message.chat_id, card, fallback_text)
         return {"action": "decision_stored", "reply": reply, **stored}
 
     should_push = message.mentioned or is_query_message(message.content)
     cards = _query_related_cards(message.content, 3, db) if should_push else []
     reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
     if cards and _auto_reply_enabled():
-        reply = _send_group_text(message.chat_id, _cards_to_text(cards))
+        # 发送第一个卡片（如果有多个卡片，可以考虑合并或发送摘要）
+        first_card = cards[0]
+        fallback_text = _cards_to_text(cards)
+        reply = _send_group_card(message.chat_id, first_card, fallback_text)
     return {
         "action": "suggest_cards" if cards else "ignored",
         "should_push": bool(cards),

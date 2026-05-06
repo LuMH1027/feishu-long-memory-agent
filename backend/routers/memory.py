@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.dependencies import get_db
 from backend.schemas.memory import MemoryCreate, MemoryRetrieveRequest
-from db.relational.models import Memory
+from db.relational.models import Memory, DecisionMemory
 
 router = APIRouter()
 
@@ -446,3 +446,50 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="记忆不存在")
     storage.delete_memory(db, memory_id)
     return {"status": "ok", "message": "记忆删除成功"}
+
+
+@router.delete("/", summary="清空所有记忆")
+def clear_all_memories(db: Session = Depends(get_db)):
+    """清空所有记忆，包括关系库和向量库"""
+    if not _has_db(db):
+        count = len(temp_memory_storage)
+        temp_memory_storage.clear()
+        return {"status": "ok", "message": f"已清空 {count} 条临时记忆", "deleted_count": count}
+
+    # 统计删除数量
+    memories = db.query(Memory).all()
+    count = len(memories)
+
+    if count == 0:
+        return {"status": "ok", "message": "记忆库为空", "deleted_count": 0}
+
+    # 删除关系库中的所有记忆
+    try:
+        db.query(DecisionMemory).delete()
+        db.query(Memory).delete()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"删除关系库数据失败: {str(e)}")
+
+    # 删除向量库中的所有记忆
+    vector_deleted = 0
+    try:
+        from db.vector.client import vector_client
+        # 获取所有记忆ID用于向量库删除
+        memory_ids = [memory.id for memory in memories]
+        for memory_id in memory_ids:
+            try:
+                vector_client.delete_memory(memory_id)
+                vector_deleted += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "message": f"已清空 {count} 条记忆（关系库: {count} 条，向量库: {vector_deleted} 条）",
+        "deleted_count": count,
+        "vector_deleted": vector_deleted
+    }

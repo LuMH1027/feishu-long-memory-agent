@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/view_database.py)",
+      "Bash(python -m pytest tests/unit/test_cli_basic.py -q -p no:cacheprovider)",
+      "Bash(pip list *)",
+      "Bash(pytest tests/unit/test_cli_basic.py -q -p no:cacheprovider)",
+      "Bash(pytest tests *)",
+      "Bash(pytest tests/unit/test_cli_phase2.py::test_search_execute_runs_first_result -v)",
+      "Bash(pytest tests/unit/test_memory_and_feishu_routes.py -q -p no:cacheprovider)",
+      "Bash(pytest tests/unit/test_memory_and_feishu_routes.py::test_feishu_auto_reply_uses_sdk_sender_when_enabled -v)",
+      "Bash(pytest tests/unit/test_core_components.py -v)",
+      "Bash(pytest tests/unit/test_core_components.py -q -p no:cacheprovider)",
+      "Bash(python)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

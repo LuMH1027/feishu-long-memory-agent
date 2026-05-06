@@ -3,7 +3,11 @@ import uuid
 from datetime import datetime, timedelta
 import os
 import json
+import logging
 from db.relational.models import Memory
+
+# 获取日志器
+logger = logging.getLogger(__name__)
 
 
 def get_embedding(text: str):
@@ -42,24 +46,33 @@ def save_memory(db: Session, memory_data):
     """保存记忆到关系库和向量库"""
     memory_id = uuid.uuid4().hex[:16]
     metadata = _memory_metadata(memory_data)
-    
+
+    logger.info(f"开始保存记忆: id={memory_id}, type={memory_data.type}, source={memory_data.source}")
+
     # 保存到关系库
-    db_memory = Memory(
-        id=memory_id,
-        content=memory_data.content,
-        type=memory_data.type,
-        source=memory_data.source,
-        description=getattr(memory_data, "description", None),
-        memory_metadata=_json_dumps(metadata),
-        user_id=memory_data.user_id,
-        team_id=memory_data.team_id,
-        expire_at=datetime.utcnow() + timedelta(days=int(os.getenv("DEFAULT_MEMORY_EXPIRE_DAYS", 30)))
-    )
-    db.add(db_memory)
-    db.commit()
-    db.refresh(db_memory)
-    
+    try:
+        db_memory = Memory(
+            id=memory_id,
+            content=memory_data.content,
+            type=memory_data.type,
+            source=memory_data.source,
+            description=getattr(memory_data, "description", None),
+            memory_metadata=_json_dumps(metadata),
+            user_id=memory_data.user_id,
+            team_id=memory_data.team_id,
+            expire_at=datetime.utcnow() + timedelta(days=int(os.getenv("DEFAULT_MEMORY_EXPIRE_DAYS", 30)))
+        )
+        db.add(db_memory)
+        db.commit()
+        db.refresh(db_memory)
+        logger.info(f"关系库保存成功: id={memory_id}")
+    except Exception as e:
+        logger.error(f"关系库保存失败: id={memory_id}, error={str(e)}")
+        db.rollback()
+        raise
+
     # 保存到向量库
+    vector_status = "skipped"
     try:
         embedding = get_embedding(memory_data.content)
         vector_client.add_memory(
@@ -74,10 +87,17 @@ def save_memory(db: Session, memory_data):
                 **metadata,
             }
         )
-    except Exception:
+        vector_status = "ok"
+        logger.info(f"向量库保存成功: id={memory_id}")
+    except Exception as e:
         # Relational storage is the source of truth; vector search can be restored later.
-        pass
-    
+        vector_status = "error"
+        logger.warning(f"向量库保存失败（降级为关系库）: id={memory_id}, error={str(e)}")
+
+    # 记录向量库状态到metadata
+    db_memory.memory_metadata = _json_dumps({**metadata, "vector_status": vector_status})
+    db.commit()
+
     return db_memory
 
 def get_memory_by_id(db: Session, memory_id: str):
@@ -86,12 +106,27 @@ def get_memory_by_id(db: Session, memory_id: str):
 
 def delete_memory(db: Session, memory_id: str):
     """删除记忆"""
+    logger.info(f"开始删除记忆: id={memory_id}")
+
     db_memory = get_memory_by_id(db, memory_id)
-    if db_memory:
+    if not db_memory:
+        logger.warning(f"记忆不存在: id={memory_id}")
+        return False
+
+    try:
         db.delete(db_memory)
         db.commit()
-        try:
-            vector_client.delete_memory(memory_id)
-        except Exception:
-            pass
+        logger.info(f"关系库删除成功: id={memory_id}")
+    except Exception as e:
+        logger.error(f"关系库删除失败: id={memory_id}, error={str(e)}")
+        db.rollback()
+        raise
+
+    # 删除向量库
+    try:
+        vector_client.delete_memory(memory_id)
+        logger.info(f"向量库删除成功: id={memory_id}")
+    except Exception as e:
+        logger.warning(f"向量库删除失败: id={memory_id}, error={str(e)}")
+
     return True
