@@ -20,7 +20,17 @@
       "Bash(D:/anaconda3/python.exe -c ' *)",
       "Bash(D:/anaconda3/python.exe -m pytest tests -v -p no:cacheprovider --tb=no)",
       "Bash(D:/anaconda3/python.exe -m pytest tests -v -p no:cacheprovider --tb=no --ignore=tests/test_chroma.py)",
-      "Bash(D:/anaconda3/python.exe -m pytest tests -q -p no:cacheprovider --tb=short --ignore=tests/test_chroma.py)"
+      "Bash(D:/anaconda3/python.exe -m pytest tests -q -p no:cacheprovider --tb=short --ignore=tests/test_chroma.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('e:/feishu-long-memory-agent/交付物/demo_runner.py', encoding='utf-8'\\).read\\(\\)\\); print\\('语法检查通过'\\)\")",
+      "Bash(python -m pytest tests -q -p no:cacheprovider)",
+      "Bash(conda run *)",
+      "Bash(python -c \"import openai; print\\('openai:', openai.__version__\\)\")",
+      "Bash(python -c \"import httpx; print\\('httpx:', httpx.__version__\\)\")",
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c \"import openai; print\\('openai:', openai.__version__\\)\")",
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c \"import httpx; print\\('httpx:', httpx.__version__\\)\")",
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai)",
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai -i https://pypi.org/simple/)",
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c ' *)"
     ]
   }
 }

@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 MessageHandler = Callable[[dict[str, Any]], Any]

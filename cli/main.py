@@ -26,7 +26,7 @@ def get_api_base() -> str:
             return config["default"]["api_base"]
     
     # 2. 兼容本地开发，从.env文件读取
-    load_dotenv()
+    load_dotenv(override=True)
     return os.getenv("API_BASE", "http://localhost:8000/api/v1")
 
 API_BASE = get_api_base()

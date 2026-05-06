@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from backend.dependencies import init_database_schema
 from backend.routers import cli, feishu, memory, health
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 @asynccontextmanager

@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def _credentials(app_id: Optional[str] = None, app_secret: Optional[str] = None) -> tuple[str, str]:

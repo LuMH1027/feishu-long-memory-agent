@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 DECISION_EXTRACTION_PROMPT = """你是一个专业的决策分析助手。请从以下飞书群聊消息中提取结构化的项目决策信息。
