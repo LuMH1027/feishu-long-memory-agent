@@ -30,7 +30,8 @@
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c \"import httpx; print\\('httpx:', httpx.__version__\\)\")",
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai)",
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai -i https://pypi.org/simple/)",
-      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c ' *)"
+      "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c ' *)",
+      "Bash(netstat -ano)"
     ]
   }
 }

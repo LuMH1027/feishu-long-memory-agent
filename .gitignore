@@ -42,6 +42,9 @@ db/vector_store/
 .env.local
 .env.*.local
 
+# Demo scripts and output
+demo/
+
 # Logs
 logs/
 *.log
