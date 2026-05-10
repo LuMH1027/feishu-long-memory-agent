@@ -1,6 +1,7 @@
 from datetime import datetime
 import json
 import re
+import uuid
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -11,11 +12,14 @@ from sqlalchemy.orm import Session
 from backend.dependencies import get_db
 from backend.schemas.memory import MemoryCreate, MemoryRetrieveRequest
 from db.relational.models import Memory, DecisionMemory
+from core import retriever
+from core import storage
 
 router = APIRouter()
 
 # Unit-test fallback only. Real API requests receive a SQLAlchemy session.
 temp_memory_storage: list[dict[str, Any]] = []
+MAX_TEMP_MEMORIES = 1000
 
 
 class MemoryStoreRequest(BaseModel):
@@ -70,7 +74,7 @@ def _memory_to_dict(memory: Memory) -> dict[str, Any]:
 def _memory_from_payload(payload: MemoryStoreRequest) -> dict[str, Any]:
     now = _now_iso()
     return {
-        "id": __import__("uuid").uuid4().hex[:16],
+        "id": uuid.uuid4().hex[:16],
         "content": payload.content,
         "type": payload.type,
         "source": payload.source,
@@ -322,8 +326,6 @@ def _search_db(
 ) -> list[dict[str, Any]]:
     vector_results = []
     try:
-        from core import retriever
-
         vector_memories = retriever.search_memories(db, query, limit, threshold=0.0)
         vector_results = [_memory_to_dict(memory) for memory in vector_memories]
         vector_results = [memory for memory in vector_results if _is_active_memory(memory)]
@@ -346,11 +348,14 @@ def _search_db(
             keyword_results.append(memory_dict)
 
     results = _sort_and_limit(vector_results + keyword_results, query, limit, directory)
-    for result in results:
-        memory = db.query(Memory).filter(Memory.id == result["id"]).first()
-        if memory:
-            memory.hit_count = (memory.hit_count or 0) + 1
-    db.commit()
+    if results:
+        result_ids = [r["id"] for r in results]
+        memories_by_id = {m.id: m for m in db.query(Memory).filter(Memory.id.in_(result_ids)).all()}
+        for result in results:
+            memory = memories_by_id.get(result["id"])
+            if memory:
+                memory.hit_count = (memory.hit_count or 0) + 1
+        db.commit()
     return results
 
 
@@ -360,6 +365,8 @@ def store_memory(memory_data: MemoryStoreRequest, db: Session = Depends(get_db))
         prepared = _prepare_correction_metadata(memory_data, [])
         memory = _memory_from_payload(prepared)
         temp_memory_storage.append(memory)
+        if len(temp_memory_storage) > MAX_TEMP_MEMORIES:
+            temp_memory_storage[:] = temp_memory_storage[-MAX_TEMP_MEMORIES:]
         superseded_ids = _supersede_temp_memories(prepared, memory["id"])
         if superseded_ids:
             memory["metadata"]["supersedes"] = superseded_ids
@@ -368,7 +375,6 @@ def store_memory(memory_data: MemoryStoreRequest, db: Session = Depends(get_db))
     superseded_memories = _find_db_superseded_memories(db, memory_data)
     prepared = _prepare_correction_metadata(memory_data, [memory.id for memory in superseded_memories])
     payload = SimpleNamespace(**prepared.model_dump())
-    from core import storage
 
     memory = storage.save_memory(db, payload)
     _mark_db_superseded(db, superseded_memories, memory.id, _topic_key(prepared))
@@ -423,8 +429,6 @@ def get_memory(memory_id: str, db: Session = Depends(get_db)):
                 return memory
         raise HTTPException(status_code=404, detail="记忆不存在")
 
-    from core import storage
-
     memory = storage.get_memory_by_id(db, memory_id)
     if not memory:
         raise HTTPException(status_code=404, detail="记忆不存在")
@@ -440,11 +444,8 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)):
             raise HTTPException(status_code=404, detail="记忆不存在")
         return {"status": "ok", "message": "记忆删除成功"}
 
-    from core import storage
-
-    if not storage.get_memory_by_id(db, memory_id):
+    if not storage.delete_memory(db, memory_id):
         raise HTTPException(status_code=404, detail="记忆不存在")
-    storage.delete_memory(db, memory_id)
     return {"status": "ok", "message": "记忆删除成功"}
 
 

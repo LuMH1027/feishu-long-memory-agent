@@ -63,7 +63,7 @@ def save_memory(db: Session, memory_data):
             expire_at=datetime.utcnow() + timedelta(days=int(os.getenv("DEFAULT_MEMORY_EXPIRE_DAYS", 30)))
         )
         db.add(db_memory)
-        db.commit()
+        db.flush()
         db.refresh(db_memory)
         logger.info(f"关系库保存成功: id={memory_id}")
     except Exception as e:
