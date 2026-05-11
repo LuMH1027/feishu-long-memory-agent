@@ -103,6 +103,11 @@ mem memorize "docker run -p 8080:80 --name webapp my-image:1.2" --type "docker�
 # 语义搜索（自然语言）
 mem search "启动webapp容器"
 
+# 搜索 + 展示降级模式
+mem search "启动容器" --explain
+# ✅ 语义搜索 | 找到 3 条
+# ⚠️ Embedding 不可用，降级为关键词搜索 | 找到 2 条
+
 # 前缀推荐
 mem suggest "docker" --limit 5
 

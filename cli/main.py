@@ -94,13 +94,18 @@ def _search_memories(
     limit: int,
     memory_type: Optional[str] = None,
     directory: Optional[str] = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str]:
+    """返回 (结果列表, 搜索模式)
+
+    搜索模式: semantic=语义搜索, retrieve=向量检索, keyword=关键词降级
+    """
     params: dict[str, Any] = {"query": query, "limit": limit}
     if memory_type:
         params["type"] = memory_type
     if directory:
         params["directory"] = directory
 
+    mode = "semantic"
     results = []
     try:
         response = _request("GET", "/memory/search", params=params)
@@ -110,16 +115,22 @@ def _search_memories(
         results = []
 
     if not results:
-        response = _request("POST", "/memory/retrieve", json={"query": query, "top_k": limit})
-        response.raise_for_status()
-        results = response.json()
+        mode = "retrieve"
+        try:
+            response = _request("POST", "/memory/retrieve", json={"query": query, "top_k": limit})
+            response.raise_for_status()
+            results = response.json()
+        except requests.RequestException:
+            results = []
 
     normalized = [_normalize_result(item) for item in results]
     if memory_type:
         normalized = [item for item in normalized if item.get("type") == memory_type]
     if normalized:
-        return normalized[:limit]
+        return normalized[:limit], mode
 
+    # 向量搜索无结果 → 降级为关键词/前缀匹配
+    mode = "keyword"
     try:
         response = _request(
             "POST",
@@ -138,7 +149,7 @@ def _search_memories(
     command_results = [_normalize_result({**item, "type": "cli_command"}) for item in suggestions]
     if memory_type:
         command_results = [item for item in command_results if item.get("type") == memory_type]
-    return command_results[:limit]
+    return command_results[:limit], mode
 
 # --- 命令实现 ---
 
@@ -207,10 +218,22 @@ def search(
     execute: bool = typer.Option(False, help="直接执行第一个匹配的命令"),
     copy: bool = typer.Option(False, help="直接复制第一个匹配的命令到剪贴板"),
     type: Optional[str] = typer.Option(None, help="按记忆类型过滤"),
+    explain: bool = typer.Option(False, "--explain", help="展示搜索模式和降级状态"),
 ):
     """搜索相关记忆"""
     try:
-        results = _search_memories(query, limit, type, _current_directory())
+        results, mode = _search_memories(query, limit, type, _current_directory())
+
+        # --explain: 展示搜索模式
+        if explain:
+            if mode == "semantic":
+                typer.echo(f"✅ 语义搜索 | 找到 {len(results)} 条")
+            elif mode == "retrieve":
+                typer.echo(f"✅ 向量检索 | 找到 {len(results)} 条")
+            elif mode == "keyword":
+                typer.echo(f"⚠️ Embedding 不可用，降级为关键词搜索 | 找到 {len(results)} 条")
+            typer.echo()
+
         if not results:
             typer.echo("❌ 没有找到相关记忆")
             return
@@ -481,7 +504,7 @@ def list_workflows(limit: int = typer.Option(10, help="返回数量")):
 def run_workflow(name: str = typer.Argument(..., help="工作流名称")):
     """执行已保存的工作流"""
     try:
-        results = _search_memories(name, 1, "cli_workflow", _current_directory())
+        results, _ = _search_memories(name, 1, "cli_workflow", _current_directory())
         if not results:
             typer.echo(f"❌ 未找到工作流《{name}》")
             return
