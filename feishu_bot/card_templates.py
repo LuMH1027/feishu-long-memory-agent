@@ -61,7 +61,8 @@ def decision_card(
     preferred_terms: Optional[list[str]] = None,
     rejected_terms: Optional[list[str]] = None,
     created_at: Optional[str] = None,
-    memory_id: Optional[str] = None
+    memory_id: Optional[str] = None,
+    status: str = "active",
 ) -> dict[str, Any]:
     """
     创建决策卡片
@@ -75,14 +76,19 @@ def decision_card(
         rejected_terms: 废弃的术语/方案
         created_at: 记录时间
         memory_id: 记忆ID
+        status: 决策状态 (pending=待确认, active=已确认)
 
     Returns:
         飞书交互卡片JSON
     """
+    is_pending = status == "pending"
     elements = []
 
-    # 标题区域
-    elements.append(_text_element(f"📋 决策主题：{topic}", bold=True))
+    # 待确认标识
+    if is_pending:
+        elements.append(_text_element("⏳ 待确认决策 — 请 👍 确认采纳 或 👎 打回", bold=True))
+    else:
+        elements.append(_text_element(f"📋 决策主题：{topic}", bold=True))
 
     if project:
         elements.append(_text_element(f"🎯 相关项目：{project}"))
@@ -118,25 +124,35 @@ def decision_card(
 
     # 操作按钮
     elements.append(_divider())
-    buttons = []
 
-    if memory_id:
-        buttons.append(_button("查看详情", {"action": "view_detail", "memory_id": memory_id}, "default"))
-
-    buttons.append(_button("确认采纳", {"action": "confirm_decision", "topic": topic}, "primary"))
-
-    if buttons:
+    if is_pending:
+        # 待确认：确认采纳 + 打回 两个按钮
         elements.append({
             "tag": "action",
-            "actions": buttons
+            "actions": [
+                _button("确认采纳", {"action": "confirm_decision", "memory_id": memory_id or ""}, "primary"),
+                _button("打回", {"action": "reject_decision", "memory_id": memory_id or ""}, "danger"),
+            ]
         })
+        elements.append(_text_element("💡 也可以直接在消息上 👍 确认 / 👎 打回，或 @机器人 打回"))
+    else:
+        # 已确认：查看详情
+        buttons = []
+        if memory_id:
+            buttons.append(_button("查看详情", {"action": "view_detail", "memory_id": memory_id}, "default"))
+        buttons.append(_button("确认采纳", {"action": "confirm_decision", "topic": topic}, "primary"))
+        if buttons:
+            elements.append({
+                "tag": "action",
+                "actions": buttons
+            })
 
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": f"📋 团队决策：{topic}"
+                "content": f"{'⏳' if is_pending else '📋'} {'待确认' if is_pending else '团队决策'}：{topic}"
             },
             "template": "blue"
         },
@@ -349,7 +365,8 @@ def memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
         preferred_terms=metadata.get("preferred_terms", []),
         rejected_terms=metadata.get("rejected_terms", []),
         created_at=created_at,
-        memory_id=memory_id
+        memory_id=memory_id,
+        status=metadata.get("status", "active"),
     )
 
 

@@ -22,6 +22,12 @@ except Exception:
 
 router = APIRouter(prefix="/feishu", tags=["飞书协同记忆"])
 
+# 待确认决策映射: message_id → memory_id
+# 用于 Reaction 事件匹配和自动确认
+_pending_decisions: dict[str, str] = {}  # message_id → memory_id
+_pending_reactions: dict[str, dict[str, int]] = {}  # message_id → {emoji: count}
+PENDING_TIMEOUT_SECONDS = 300  # 5 分钟无人操作自动确认
+
 
 class FeishuMessage(BaseModel):
     content: str
@@ -386,7 +392,7 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
         **decision,
         "chat_id": request.chat_id,
         "message_id": request.message_id,
-        "status": "active",
+        "status": "pending",
         "extracted_at": datetime.now().isoformat(),
         "extraction_method": "llm" if use_llm and decision.get("llm_confidence") else "rules",
     }
@@ -475,6 +481,110 @@ def _query_temp_cli_cards(query: str, limit: int) -> list[dict[str, Any]]:
     return cards
 
 
+# ── 人审机决：确认 / 打回 ──────────────────────────────
+
+
+def _find_pending_for_chat(chat_id: Optional[str]) -> Optional[str]:
+    """查找某群聊最近的一条 pending 决策 memory_id"""
+    for msg_id, mem_id in reversed(list(_pending_decisions.items())):
+        if mem_id:
+            return mem_id
+    return None
+
+
+def _confirm_decision(memory_id: str, db: Optional[Session] = None) -> dict[str, Any]:
+    """确认 pending 决策为 active"""
+    if _has_db(db):
+        from db.relational.models import Memory as MemoryModel
+        record = db.query(MemoryModel).filter(MemoryModel.id == memory_id).first()
+        if record:
+            metadata = _metadata_from_json(record.memory_metadata)
+            metadata["status"] = "active"
+            metadata["confirmed_at"] = datetime.now().isoformat()
+            record.memory_metadata = _metadata_to_json(metadata)
+            db.commit()
+            # 清理 pending 映射
+            for k, v in list(_pending_decisions.items()):
+                if v == memory_id:
+                    del _pending_decisions[k]
+            return {"status": "ok", "action": "confirmed", "memory_id": memory_id}
+    # temp 模式
+    for idx, item in enumerate(memory.temp_memory_storage):
+        if item.get("id") == memory_id:
+            metadata = item.get("metadata") or {}
+            metadata["status"] = "active"
+            metadata["confirmed_at"] = datetime.now().isoformat()
+            item["metadata"] = metadata
+            for k, v in list(_pending_decisions.items()):
+                if v == memory_id:
+                    del _pending_decisions[k]
+            return {"status": "ok", "action": "confirmed", "memory_id": memory_id}
+    return {"status": "error", "message": "未找到该决策"}
+
+
+def _reject_decision(memory_id: str, db: Optional[Session] = None) -> dict[str, Any]:
+    """打回/删除 pending 决策"""
+    if _has_db(db):
+        from db.relational.models import Memory as MemoryModel
+        record = db.query(MemoryModel).filter(MemoryModel.id == memory_id).first()
+        if record:
+            metadata = _metadata_from_json(record.memory_metadata)
+            metadata["status"] = "rejected"
+            metadata["rejected_at"] = datetime.now().isoformat()
+            record.memory_metadata = _metadata_to_json(metadata)
+            db.commit()
+            for k, v in list(_pending_decisions.items()):
+                if v == memory_id:
+                    del _pending_decisions[k]
+            return {"status": "ok", "action": "rejected", "memory_id": memory_id}
+    # temp 模式
+    for idx, item in enumerate(memory.temp_memory_storage):
+        if item.get("id") == memory_id:
+            metadata = item.get("metadata") or {}
+            metadata["status"] = "rejected"
+            metadata["rejected_at"] = datetime.now().isoformat()
+            item["metadata"] = metadata
+            for k, v in list(_pending_decisions.items()):
+                if v == memory_id:
+                    del _pending_decisions[k]
+            return {"status": "ok", "action": "rejected", "memory_id": memory_id}
+    return {"status": "error", "message": "未找到该决策"}
+
+
+@router.post("/decision/confirm", summary="确认 pending 决策")
+def confirm_decision(memory_id: str, db: Session = Depends(get_db)):
+    """通过 Reaction 👍 或卡片按钮确认决策"""
+    return _confirm_decision(memory_id, db)
+
+
+@router.post("/decision/reject", summary="打回 pending 决策")
+def reject_decision(memory_id: str, db: Session = Depends(get_db)):
+    """通过 Reaction 👎 或 @机器人打回 来拒绝决策"""
+    return _reject_decision(memory_id, db)
+
+
+@router.post("/decision/reaction", summary="处理 Reaction 事件")
+def handle_reaction_event(message_id: str, emoji: str, db: Session = Depends(get_db)):
+    """处理飞书 Reaction 事件：👍 确认 / 👎 打回"""
+    memory_id = _pending_decisions.get(message_id)
+    if not memory_id:
+        return {"status": "ignored", "reason": "该消息没有待确认决策"}
+
+    if message_id not in _pending_reactions:
+        _pending_reactions[message_id] = {}
+    _pending_reactions[message_id][emoji] = _pending_reactions[message_id].get(emoji, 0) + 1
+
+    if emoji in ("👍", "THUMBSUP", "+1"):
+        count = _pending_reactions[message_id].get(emoji, 1)
+        if count >= 3:
+            return _confirm_decision(memory_id, db)
+        return {"status": "counting", "count": count, "needed": 3, "memory_id": memory_id}
+    if emoji in ("👎", "THUMBSDOWN", "-1"):
+        return _reject_decision(memory_id, db)
+
+    return {"status": "ignored", "reason": f"未处理的 Reaction: {emoji}"}
+
+
 @router.post("/event/callback")
 async def feishu_event_callback(request: Request, db: Session = Depends(get_db)):
     """飞书事件回调接口：校验签名，并对消息事件做决策提取或知识查询。"""
@@ -522,6 +632,18 @@ def query_feishu_memory(request: FeishuQueryRequest, db: Session = Depends(get_d
 @router.post("/message/analyze")
 def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db)):
     """分析群消息：决策入库，或在相关话题出现时返回主动推送候选卡片。"""
+    # 检查是否打回消息
+    reject_keywords = ("打回", "这个不对", "不是这个", "撤回这条", "撤销这条")
+    if message.mentioned and any(kw in (message.content or "") for kw in reject_keywords):
+        memory_id = _find_pending_for_chat(message.chat_id)
+        if memory_id:
+            _reject_decision(memory_id)
+            return {
+                "action": "decision_rejected",
+                "memory_id": memory_id,
+                "reason": "用户打回",
+            }
+
     if is_decision_message(message.content):
         stored = _store_decision_record(
             DecisionExtractRequest(
@@ -535,8 +657,9 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
         )
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
         if _auto_reply_enabled():
-            # 发送决策卡片
+            # 发送待确认决策卡片
             decision = stored.get("decision", {})
+            memory_id = stored.get("memory", {}).get("id")
             from feishu_bot.card_templates import decision_card
             card = decision_card(
                 topic=decision.get("topic", "未知主题"),
@@ -546,10 +669,15 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 preferred_terms=decision.get("preferred_terms", []),
                 rejected_terms=decision.get("rejected_terms", []),
                 created_at=datetime.now().isoformat(),
-                memory_id=stored.get("memory", {}).get("id")
+                memory_id=memory_id,
+                status="pending",
             )
-            fallback_text = f"已记录团队决策：{stored['decision']['conclusion']}"
+            fallback_text = f"待确认决策：{stored['decision']['conclusion']}\n请 👍 确认采纳 / 👎 打回"
             reply = _send_group_card(message.chat_id, card, fallback_text)
+            # 记录映射，用于 Reaction 匹配
+            reply_msg_id = reply.get("message_id")
+            if reply_msg_id and memory_id:
+                _pending_decisions[reply_msg_id] = memory_id
         return {"action": "decision_stored", "reply": reply, **stored}
 
     should_push = message.mentioned or is_query_message(message.content)

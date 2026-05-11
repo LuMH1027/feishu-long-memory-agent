@@ -56,6 +56,24 @@ def mock_send_card_message(chat_id: str, card: dict[str, Any]) -> dict[str, Any]
     return {"status": "ok", "provider": "mock", "message_id": msg_id}
 
 
+def mock_reaction(message_id: str, emoji: str = "👍") -> dict[str, Any]:
+    """Mock 模式下模拟 Reaction 事件，直接调用后端确认/打回端点"""
+    import requests
+    print(f"\n{_MOCK_PREFIX} 模拟 Reaction: {emoji} → message_id={message_id}")
+    try:
+        r = requests.post(
+            "http://127.0.0.1:8000/api/v1/feishu/decision/reaction",
+            json={"message_id": message_id, "emoji": emoji},
+            timeout=5,
+        )
+        result = r.json()
+        print(f"{_MOCK_PREFIX}   结果: {json.dumps(result, ensure_ascii=False)}")
+        return result
+    except Exception as e:
+        print(f"{_MOCK_PREFIX}   失败: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def mock_start_ws_client() -> None:
     print(f"\n{_MOCK_PREFIX} 飞书 WebSocket 事件监听已就绪 (模拟模式)")
     print(f"{_MOCK_PREFIX}   在 Mock 模式下，不会建立真实的飞书连接")

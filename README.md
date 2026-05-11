@@ -122,19 +122,19 @@ mem workflow run "生产健康检查"
 
 | 消息类型 | 示例 | 机器人行为 |
 |---------|------|-----------|
-| 决策消息 | `以后统一用 Jest 做单元测试` | 提取决策 → 入库 → 推送蓝色卡片 |
+| 决策消息 | `以后统一用 Jest 做单元测试` | 提取决策 → 推送待确认卡片 → 👍/👎 确认/打回 → 入库 |
 | 查询消息 | `之前用什么部署环境？` | 检索相关记忆 → 推送卡片 |
 | 矛盾更新 | `更正，以后用 prod 不用 staging` | 覆盖旧决策 → 推送更新卡片 |
 | 普通消息 | `今天天气不错` | 忽略，不回复 |
 
 ### 飞书决策卡片
 
-机器人会推送结构化的决策卡片，包含：
+机器人推送待确认决策卡片，通过 Reaction 实现人审机决：
 
-- 决策主题和结论
-- 推荐方案 / 废弃方案
-- 相关项目和截止日期
-- 记录时间
+- **待确认卡片**：包含 `[确认采纳]` `[打回]` 按钮
+- **Reaction 确认**：👍 确认采纳（3 人 👍 自动确认）、👎 打回删除
+- **文本打回**：`@机器人 打回` 附带理由撤回
+- 卡片展示决策主题、结论、原因、推荐/废弃方案、截止日期和记录时间
 
 ## 技术栈
 
@@ -180,22 +180,25 @@ mem workflow run "生产健康检查"
 
 ## Demo 演示
 
+三种演示脚本，按场景选用：
+
 ```bash
+# 叙事版（4 分钟故事线，适合答辩路演）
+python demo/demo_story.py --reset-db
+
 # 全自动日志（截图友好，一条命令跑完 12 步）
 python demo/auto_log.py --reset-db
-
-# 断点续跑：第 5 步出错了，从第 5 步继续（跳过重置保留已有数据）
-python demo/auto_log.py --start-from 5
+python demo/auto_log.py --start-from 5    # 断点续跑
 
 # 交互式录屏（有暂停提示，适合录视频，5 个阶段）
 python demo/demo_record.py --reset-db
-python demo/demo_record.py --start-from 3   # 从阶段 3 继续
+python demo/demo_record.py --start-from 3  # 从阶段 3 继续
 ```
 
-**飞书 Mock 模式**：未安装 `lark-oapi` 或未配置飞书凭证时，自动切换到消息模拟输出。也可手动开启：
+**飞书 Mock 模式**：未安装 `lark-oapi` 或未配置飞书凭证时，自动切换到消息模拟输出：
 
 ```bash
-FEISHU_MOCK_MODE=1 python demo/auto_log.py --reset-db
+FEISHU_MOCK_MODE=1 python demo/demo_story.py --reset-db
 ```
 
 ## 许可证

@@ -84,14 +84,51 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
         if payload.get("content"):
             handler(payload)
 
-    return (
-        lark.EventDispatcherHandler.builder(
-            os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
-            os.getenv("FEISHU_ENCRYPT_KEY", ""),
+    def handle_reaction(event) -> None:
+        """处理飞书消息 Reaction 事件，转发到后端 /decision/reaction"""
+        event_body = _get_attr(event, "event", event)
+        message_id = _get_attr(event_body, "message_id", "")
+        reaction = _get_attr(event_body, "reaction", {}) or {}
+        # 支持多种 Reaction 嵌套结构
+        if isinstance(reaction, dict):
+            emoji = reaction.get("emoji") or reaction.get("type") or ""
+        else:
+            emoji = str(reaction)
+        action = _get_attr(event_body, "action", "added")
+        if not message_id or not emoji or action != "added":
+            return
+        try:
+            import requests
+            base_url = os.getenv("MEM_AGENT_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+            requests.post(
+                f"{base_url}/api/v1/feishu/decision/reaction",
+                json={"message_id": message_id, "emoji": emoji},
+                timeout=5,
+            )
+        except Exception:
+            pass
+
+    try:
+        from lark_oapi.api.im.v1 import P2ImMessageReactionV1
+        return (
+            lark.EventDispatcherHandler.builder(
+                os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
+                os.getenv("FEISHU_ENCRYPT_KEY", ""),
+            )
+            .register_p2_im_message_receive_v1(handle_message)
+            .register_p2_im_message_reaction_v1(handle_reaction)
+            .build()
         )
-        .register_p2_im_message_receive_v1(handle_message)
-        .build()
-    )
+    except (ImportError, AttributeError):
+        # 旧版 lark-oapi 可能没有 P2ImMessageReactionV1
+        return (
+            lark.EventDispatcherHandler.builder(
+                os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
+                os.getenv("FEISHU_ENCRYPT_KEY", ""),
+            )
+            .register_p2_im_message_receive_v1(handle_message)
+            .build()
+        )
 
 
 def create_ws_client(app_id: Optional[str] = None, app_secret: Optional[str] = None, on_message: Optional[MessageHandler] = None):
