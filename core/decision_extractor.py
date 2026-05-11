@@ -231,6 +231,85 @@ def extract_decision_with_rules_fallback(message: str, use_llm: bool = True) -> 
     }
 
 
+# ── LLM 消息意图分类 ────────────────────────────────────
+
+INTENT_CLASSIFICATION_PROMPT = """你是一个专业的飞书群聊消息分析助手。请将以下消息分类为以下意图之一，并输出JSON。
+
+意图类型：
+- decision_new: 明确提出了一个新的团队决策、规范或约定（如"以后用XXX"、"统一用XXX"）
+- decision_revise: 修改或更正已有决策（如"不对，XXX改成YYY"、"更正，XXX"、暗示之前方案不对）
+- decision_confirm: 表示同意已有建议或确认已有决策（如"那就按XXX说的做"、"同意"、"OK就用这个"）
+- decision_repeal: 明确废除或放弃已有决策（如"废弃XXX"、"不再使用XXX"、"取消XXX"）
+- unclear: 有决策意图但信息不足（如模糊引用"用那个新的"、只说问题没给方案、多人讨论无共识）
+- query: 提问、查找信息（如"怎么XXX"、"查一下XXX"、"之前XXX是什么"）
+- chat: 普通闲聊、讨论、信息同步，不涉及决策意图
+
+输出格式（严格JSON，不要其他内容）：
+{
+    "intent": "decision_new|decision_revise|decision_confirm|decision_repeal|unclear|query|chat",
+    "confidence": 0.0-1.0,
+    "reason": "分类理由（一句话）",
+    "clarification_question": "追问内容（仅unclear时需要，其他为null）",
+    "suggested_options": ["选项1", "选项2"] (仅unclear时最多3个选项，其他为空数组)
+}
+
+示例1：
+输入："那就按张工说的做吧"
+输出：{"intent": "decision_confirm", "confidence": 0.92, "reason": "明确表示同意按张工方案执行", "clarification_question": null, "suggested_options": []}
+
+示例2：
+输入："以后用那个新的部署方式"
+输出：{"intent": "unclear", "confidence": 0.85, "reason": "有决策意图但方案不明确", "clarification_question": "你说的「新的部署方式」是指 k8s 还是 docker-compose？", "suggested_options": ["k8s部署", "docker-compose部署", "等有结论再说"]}
+
+现在请分析以下消息：
+{message}
+"""
+
+
+def classify_message_intent(message: str, model: Optional[str] = None) -> dict[str, Any]:
+    """
+    使用 LLM 对飞书消息进行 7 类意图分类
+
+    Returns:
+        {"intent": str, "confidence": float, "reason": str,
+         "clarification_question": str|null, "suggested_options": list}
+    """
+    try:
+        client = _get_openai_client()
+        model = model or os.getenv("LLM_MODEL", "gpt-3.5-turbo")
+
+        prompt = INTENT_CLASSIFICATION_PROMPT.format(message=message)
+
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是一个专业的飞书群聊消息分类助手。"},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=300,
+        )
+
+        content = response.choices[0].message.content.strip()
+        result = json.loads(content)
+
+        return {
+            "intent": result.get("intent", "chat"),
+            "confidence": float(result.get("confidence", 0.5)),
+            "reason": result.get("reason", ""),
+            "clarification_question": result.get("clarification_question"),
+            "suggested_options": result.get("suggested_options", []),
+        }
+    except Exception:
+        return {
+            "intent": "chat",
+            "confidence": 0.0,
+            "reason": "LLM调用失败，默认归类为chat",
+            "clarification_question": None,
+            "suggested_options": [],
+        }
+
+
 def batch_extract_decisions(messages: list[str], use_llm: bool = True) -> list[dict[str, Any]]:
     """
     批量抽取决策信息

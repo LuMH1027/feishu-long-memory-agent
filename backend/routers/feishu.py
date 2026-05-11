@@ -631,23 +631,35 @@ def query_feishu_memory(request: FeishuQueryRequest, db: Session = Depends(get_d
 
 @router.post("/message/analyze")
 def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db)):
-    """分析群消息：决策入库，或在相关话题出现时返回主动推送候选卡片。"""
-    # 检查是否打回消息
+    """分析群消息：LLM意图分类 → 决策入库 / 查询检索 / 追问澄清 / 忽略。"""
+    content = message.content or ""
+
+    # 检查文本打回
     reject_keywords = ("打回", "这个不对", "不是这个", "撤回这条", "撤销这条")
-    if message.mentioned and any(kw in (message.content or "") for kw in reject_keywords):
+    if message.mentioned and any(kw in content for kw in reject_keywords):
         memory_id = _find_pending_for_chat(message.chat_id)
         if memory_id:
             _reject_decision(memory_id)
-            return {
-                "action": "decision_rejected",
-                "memory_id": memory_id,
-                "reason": "用户打回",
-            }
+            return {"action": "decision_rejected", "memory_id": memory_id, "reason": "用户打回"}
 
-    if is_decision_message(message.content):
+    # — LLM 意图分类（优先）—
+    if _use_llm_extraction():
+        try:
+            from core.decision_extractor import classify_message_intent
+            intent_result = classify_message_intent(content)
+            intent = intent_result.get("intent", "chat")
+        except Exception:
+            intent = "chat"
+    else:
+        intent = None  # 回退到规则模式
+
+    # — 路由：decision_new / decision_revise / decision_repeal —
+    if intent in ("decision_new", "decision_revise", "decision_repeal") or (
+        intent is None and is_decision_message(content)
+    ):
         stored = _store_decision_record(
             DecisionExtractRequest(
-                content=message.content,
+                content=content,
                 chat_id=message.chat_id,
                 user_id=message.user_id,
                 message_id=message.message_id,
@@ -656,8 +668,7 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             db,
         )
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
-        if _auto_reply_enabled():
-            # 发送待确认决策卡片
+        if _auto_reply_enabled() and stored.get("status") != "ignored":
             decision = stored.get("decision", {})
             memory_id = stored.get("memory", {}).get("id")
             from feishu_bot.card_templates import decision_card
@@ -672,28 +683,44 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 memory_id=memory_id,
                 status="pending",
             )
-            fallback_text = f"待确认决策：{stored['decision']['conclusion']}\n请 👍 确认采纳 / 👎 打回"
+            fallback_text = f"待确认决策：{decision['conclusion']}\n请 👍 确认采纳 / 👎 打回"
             reply = _send_group_card(message.chat_id, card, fallback_text)
-            # 记录映射，用于 Reaction 匹配
             reply_msg_id = reply.get("message_id")
             if reply_msg_id and memory_id:
                 _pending_decisions[reply_msg_id] = memory_id
-        return {"action": "decision_stored", "reply": reply, **stored}
+        return {"action": "decision_stored", "intent": intent, "reply": reply, **stored}
 
-    should_push = message.mentioned or is_query_message(message.content)
-    cards = _query_related_cards(message.content, 3, db) if should_push else []
-    reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
-    if cards and _auto_reply_enabled():
-        # 发送第一个卡片（如果有多个卡片，可以考虑合并或发送摘要）
-        first_card = cards[0]
-        fallback_text = _cards_to_text(cards)
-        reply = _send_group_card(message.chat_id, first_card, fallback_text)
-    return {
-        "action": "suggest_cards" if cards else "ignored",
-        "should_push": bool(cards),
-        "cards": cards,
-        "reply": reply,
-    }
+    # — 路由：decision_confirm —
+    if intent == "decision_confirm":
+        memory_id = _find_pending_for_chat(message.chat_id)
+        if memory_id:
+            _confirm_decision(memory_id, db)
+            return {"action": "decision_confirmed", "memory_id": memory_id}
+        return {"action": "ignored", "reason": "无待确认决策可加固"}
+
+    # — 路由：unclear —
+    if intent == "unclear":
+        reply = {"status": "skipped"}
+        if _auto_reply_enabled():
+            question = intent_result.get("clarification_question", "能否再详细说明一下？")
+            options = intent_result.get("suggested_options", [])
+            fallback_text = f"🤔 {question}"
+            if options:
+                fallback_text += "\n" + "\n".join(f"  · {o}" for o in options)
+            reply = _send_group_text(message.chat_id, fallback_text)
+        return {"action": "clarification_needed", "intent_result": intent_result, "reply": reply}
+
+    # — 路由：query —
+    if intent == "query" or (intent is None and (message.mentioned or is_query_message(content))):
+        cards = _query_related_cards(content, 3, db)
+        reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
+        if cards and _auto_reply_enabled():
+            first_card = cards[0]
+            reply = _send_group_card(message.chat_id, first_card, _cards_to_text(cards))
+        return {"action": "suggest_cards" if cards else "no_match", "cards": cards, "reply": reply}
+
+    # — 路由：chat —
+    return {"action": "ignored", "intent": intent or "chat", "reason": "闲聊，无需处理"}
 
 
 def _extract_event_content(event_data: dict[str, Any]) -> Optional[str]:
