@@ -133,6 +133,8 @@ def decision_card(
 
     if is_pending:
         # 待确认：确认采纳 + 打回 两个按钮
+        # NOTE: 当前无 P2CardActionTrigger 处理器，按钮点击无回调响应。
+        # 实际确认/打回需通过 Reaction 👍👎，卡片按钮为辅助展示。
         elements.append({
             "tag": "action",
             "actions": [

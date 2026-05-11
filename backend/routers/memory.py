@@ -117,6 +117,19 @@ def _topic_key(payload: MemoryStoreRequest) -> str:
     return f"{payload.source}:{payload.type}:{payload.user_id or ''}:{payload.team_id or ''}"
 
 
+def _is_not_expired(memory: dict[str, Any]) -> bool:
+    """过滤过期记忆：expire_at 不为空且已过期则排除"""
+    expire_str = memory.get("expire_at")
+    if not expire_str:
+        return True
+    try:
+        from datetime import datetime
+        expire = datetime.fromisoformat(str(expire_str))
+        return datetime.now() < expire
+    except Exception:
+        return True
+
+
 def _is_active_memory(memory: dict[str, Any]) -> bool:
     metadata = memory.get("metadata") or {}
     return metadata.get("status", "active") != "inactive"
@@ -393,7 +406,7 @@ def _search_temp(
     results = [
         memory
         for memory in temp_memory_storage
-        if _is_active_memory(memory)
+        if _is_active_memory(memory) and _is_not_expired(memory)
         and (not memory_type or memory.get("type") == memory_type)
         and _memory_search_score(memory, query) > 0
     ]
@@ -413,7 +426,7 @@ def _search_db(
     try:
         vector_memories = retriever.search_memories(db, query, limit, threshold=0.0)
         vector_results = [_memory_to_dict(memory) for memory in vector_memories]
-        vector_results = [memory for memory in vector_results if _is_active_memory(memory)]
+        vector_results = [memory for memory in vector_results if _is_active_memory(memory) and _is_not_expired(memory)]
     except Exception:
         vector_results = []
 

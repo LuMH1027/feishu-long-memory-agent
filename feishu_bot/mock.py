@@ -13,11 +13,26 @@ logger = logging.getLogger("feishu.mock")
 _MOCK_PREFIX = "[飞书Mock]"
 
 
+_printed_mode = False
+
+
+def _print_mode(mock: bool):
+    global _printed_mode
+    if _printed_mode:
+        return
+    _printed_mode = True
+    if mock:
+        print(f"\n{_MOCK_PREFIX} 已激活 Mock 模式")
+        print(f"{_MOCK_PREFIX}   原因: lark-oapi 未安装 或 FEISHU_APP_ID 未配置 或 FEISHU_MOCK_MODE=true")
+        print(f"{_MOCK_PREFIX}   飞书消息仅打印到终端，不会发送到真实群聊\n")
+
+
 def should_use_mock() -> bool:
     """检测是否应使用 Mock 模式"""
     # 显式开关
     force_mock = os.getenv("FEISHU_MOCK_MODE", "").lower() in {"1", "true", "yes", "on"}
     if force_mock:
+        _print_mode(True)
         return True
 
     # lark-oapi 未安装
@@ -25,6 +40,7 @@ def should_use_mock() -> bool:
         import lark_oapi  # noqa: F401
     except ModuleNotFoundError:
         logger.info("lark-oapi 未安装，启用飞书 Mock 模式")
+        _print_mode(True)
         return True
 
     # 凭证未配置
@@ -32,8 +48,10 @@ def should_use_mock() -> bool:
     app_secret = os.getenv("FEISHU_APP_SECRET")
     if not app_id or not app_secret or app_id.startswith("your_") or app_secret.startswith("your_"):
         logger.info("飞书凭证未配置，启用飞书 Mock 模式")
+        _print_mode(True)
         return True
 
+    _print_mode(False)
     return False
 
 

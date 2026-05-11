@@ -388,7 +388,7 @@ def watch(
     shell: str = typer.Option("powershell", help="要监控的shell类型：powershell/bash/zsh"),
     auto_record_threshold: int = typer.Option(3, help="命令使用多少次后自动记录"),
 ):
-    """扫描命令行历史，自动记录高频命令"""
+    """扫描历史文件中的高频命令并自动记录（一次性，非实时监听）"""
     history_files = {
         "powershell": Path.home()
         / "AppData"
@@ -548,11 +548,14 @@ def clear(force: bool = False):
 @app.command()
 def stats():
     """系统仪表盘：一键查看记忆全貌"""
+    # health 端点不在 /api/v1 下，直接请求
+    import requests as _req
+    base = get_api_base().rstrip("/api/v1").rstrip("/")
     try:
-        health = _request("GET", "/health/detailed").json()
-        metrics = _request("GET", "/health/metrics").json()
+        health = _req.get(f"{base}/health/detailed", timeout=5).json()
+        metrics = _req.get(f"{base}/health/metrics", timeout=5).json()
     except Exception:
-        typer.echo("❌ 无法连接后端")
+        typer.echo("无法连接后端")
         return
 
     comp = health.get("components", {})

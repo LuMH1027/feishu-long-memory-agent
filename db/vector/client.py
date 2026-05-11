@@ -30,15 +30,17 @@ class VectorClient:
                 metadata={"hnsw:space": "cosine"}
             )
         except Exception as e:
-            # 集合元数据损坏等极端情况，删除重建
-            logger.warning(f"获取集合异常，尝试重建: {e}")
-            self._recreate_collection()
-            return
+            # 仅重建已知可恢复的异常
+            err_msg = str(e)
+            if "does not exist" in err_msg or "corrupt" in err_msg:
+                logger.warning(f"集合损坏，尝试重建: {e}")
+                self._recreate_collection()
+                return
+            raise  # 网络类异常向上抛出，不触发数据删除
 
         # 通过尝试写入一条测试数据检测维度是否匹配
         test_id = "__dimension_test__"
         try:
-            # 用当前 embedding 模型的维度创建测试向量
             from core.utils.embedding import get_embedding
             test_vec = get_embedding("test")
             dim = len(test_vec)
@@ -48,17 +50,15 @@ class VectorClient:
                 documents=["test"],
                 metadatas=[{"_test": "true"}]
             )
-            # 写入成功，清理测试数据
             self.collection.delete(ids=[test_id])
             logger.info(f"向量集合就绪，维度: {dim}")
         except Exception as e:
             err_msg = str(e)
-            if "does not match collection dimensionality" in err_msg:
+            if "dimensionality" in err_msg:
                 logger.warning(f"向量维度不匹配，自动重建集合: {err_msg}")
                 self._recreate_collection()
             else:
-                logger.warning(f"向量集合检测异常: {err_msg}")
-                self._recreate_collection()
+                raise  # 网络/磁盘错误不触发数据删除
 
     def _recreate_collection(self):
         """删除并重建 memories 集合。"""

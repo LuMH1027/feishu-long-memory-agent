@@ -137,10 +137,13 @@ def embedding_health_check():
 
 
 @router.get("/metrics", summary="评测数据指标")
+@router.get("/evaluation", summary="评测数据指标")
 def metrics_check():
-    """评测数据可视化指标"""
+    """评测数据可视化指标 — 自证评测结果，非实时计算"""
     return {
         "service": "enterprise-memory-engine",
+        "source": "static_evaluation_data",
+        "note": "这些数据来自独立评测脚本的一次性运行结果，非生产实时监控",
         "timestamp": datetime.now().isoformat(),
         "metrics": {
             "accuracy": {

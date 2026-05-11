@@ -15,6 +15,9 @@ from db.relational.models import DecisionMemory, Memory
 try:
     from feishu.verification import validate_signature
 except Exception:
+    # NOTE: 本地开发/演示阶段使用简化签名验证。
+    # 飞书 SDK 的签名验证器需要 `feishu/verification.py`（未包含在当前项目中）。
+    # 生产部署时需替换为真实的飞书 SDK 签名验证器（参见 T4-S1 企业级安全路线图）。
     def validate_signature(token, timestamp, nonce, body, signature):
         """本地开发兜底：未配置飞书 SDK 时只在有 token 的情况下跳过空签名。"""
         return not token or bool(signature)
@@ -595,12 +598,50 @@ def decision_timeline(topic: str, db: Session = Depends(get_db)):
                 "superseded_by": meta.get("superseded_by"),
                 "extracted_at": meta.get("extracted_at", ""),
             })
+    # 后处理：按 supersedes 链构建演变顺序
+    id_to_idx = {d["id"]: i for i, d in enumerate(timeline)}
+    for d in timeline:
+        d["_chain"] = []
+    for d in timeline:
+        for sid in d.get("supersedes", []):
+            if sid in id_to_idx:
+                prev = timeline[id_to_idx[sid]]
+                prev["_chain"].append({"id": d["id"], "conclusion": d["conclusion"][:40]})
+    # 添加演变序号
+    current = next((d for d in timeline if not d.get("superseded_by")), None)
+    seq = 1
+    while current:
+        current["_seq"] = seq
+        seq += 1
+        next_superseded = current.get("supersedes", [])
+        current = next(
+            (d for d in timeline
+             if any(s == d["id"] for s in (current.get("supersedes") or []))),
+            None
+        )
     return {"topic": topic, "timeline": timeline}
 
 
 # ── T3-2e: 决策订阅 ─────────────────────────────────────
 
+# 会话级存储（进程重启丢失；启动时从已有决策 topic 重建）
 _subscriptions: set[str] = set()
+
+
+def _rebuild_subscriptions_from_db(db: Session):
+    """从已有 project_decision 的 topic 字段重建订阅集合"""
+    if not _has_db(db):
+        return
+    try:
+        from db.relational.models import Memory as MemModel
+        rows = db.query(MemModel).filter(MemModel.type == "project_decision").all()
+        for r in rows:
+            meta = _metadata_from_json(r.memory_metadata)
+            topic = meta.get("topic")
+            if topic:
+                _subscriptions.add(topic)
+    except Exception:
+        pass
 
 
 class SubscribeRequest(BaseModel):
@@ -608,13 +649,19 @@ class SubscribeRequest(BaseModel):
 
 
 @router.post("/subscribe", summary="订阅话题")
-def subscribe_topic(request: SubscribeRequest):
+def subscribe_topic(request: SubscribeRequest, db: Session = Depends(get_db)):
+    """订阅话题（会话级，持久化在 T4 路线图中）"""
+    _subscriptions.add(request.topic)
+    if not _subscriptions:
+        _rebuild_subscriptions_from_db(db)
     _subscriptions.add(request.topic)
     return {"status": "ok", "topic": request.topic, "total": len(_subscriptions)}
 
 
 @router.get("/subscribe", summary="列出订阅")
-def list_subscriptions():
+def list_subscriptions(db: Session = Depends(get_db)):
+    if not _subscriptions:
+        _rebuild_subscriptions_from_db(db)
     return {"topics": list(_subscriptions)}
 
 
@@ -799,7 +846,10 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             reply_msg_id = reply.get("message_id")
             if reply_msg_id and memory_id:
                 _pending_decisions[reply_msg_id] = memory_id
-        return {"action": "decision_stored", "intent": intent, "reply": reply, **stored}
+        return {"action": "decision_stored", "intent": intent, "reply": reply,
+                "auto_confirm_after_seconds": PENDING_TIMEOUT_SECONDS,
+                "note": "当前为演示模式，pending 决策需手动确认。自动确认定时器在 T4 企业版中实现",
+                **stored}
 
     # — 路由：decision_confirm —
     if intent == "decision_confirm":
