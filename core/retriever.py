@@ -40,14 +40,24 @@ def calculate_cli_relevance_score(query: str, memory: Memory) -> float:
     count_score = min(count * 0.05, 0.3)
 
     recency_score = 0.0
+    days_ago = 0
     last_used = metadata.get("last_used_at")
     if last_used:
         try:
             last_used_time = datetime.fromisoformat(last_used)
-            days_ago = (datetime.now() - last_used_time).days
+            days_ago = max(0, (datetime.now() - last_used_time).days)
             recency_score = min(max(0, 0.2 - (days_ago * 0.01)), 0.2)
         except (TypeError, ValueError):
             pass
+
+    # T3-2c: 记忆衰减 — 不使用时间越长，自然沉底
+    import math
+    decay_lambda = 0.02  # 每天衰减 2%
+    decay_score = max(0, 0.3 * math.exp(-decay_lambda * days_ago)) if last_used else 0.0
+
+    # T3-2a: dismiss 降权
+    dismiss_count = int(metadata.get("dismiss_count", 0) or 0)
+    dismiss_penalty = min(dismiss_count * 0.15, 0.5)
 
     prefix_score = 0.2 if is_cli_prefix_match(query, memory) else 0.0
 
@@ -60,7 +70,7 @@ def calculate_cli_relevance_score(query: str, memory: Memory) -> float:
     total_runs = success_count + failure_count
     success_score = (success_count / total_runs) * 0.2 if total_runs else 0.0
 
-    return base_score + count_score + recency_score + prefix_score + success_score
+    return base_score + count_score + recency_score + decay_score + prefix_score + success_score - dismiss_penalty
 
 
 def _search_sort_key(query: str, memory: Memory):

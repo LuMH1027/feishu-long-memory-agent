@@ -563,6 +563,67 @@ def reject_decision(memory_id: str, db: Session = Depends(get_db)):
     return _reject_decision(memory_id, db)
 
 
+# ── T3-2d: 决策时间线 ──────────────────────────────────
+
+@router.get("/decisions/timeline", summary="决策时间线")
+def decision_timeline(topic: str, db: Session = Depends(get_db)):
+    """查看某话题的决策变更时间线（supersedes 链）"""
+    if not _has_db(db):
+        items = [
+            item for item in memory.temp_memory_storage
+            if item.get("type") == "project_decision"
+            and topic.lower() in (item.get("content", "") or "").lower()
+        ]
+        return {"topic": topic, "timeline": items}
+
+    results = (
+        db.query(Memory)
+        .filter(Memory.type == "project_decision")
+        .order_by(Memory.created_at.desc())
+        .all()
+    )
+    timeline = []
+    for m in results:
+        meta = _metadata_from_json(m.memory_metadata)
+        if topic.lower() in (m.content or "").lower() or topic.lower() in (meta.get("topic", "") or "").lower():
+            timeline.append({
+                "id": m.id,
+                "topic": meta.get("topic", ""),
+                "conclusion": m.content,
+                "status": meta.get("status", "active"),
+                "supersedes": meta.get("supersedes", []),
+                "superseded_by": meta.get("superseded_by"),
+                "extracted_at": meta.get("extracted_at", ""),
+            })
+    return {"topic": topic, "timeline": timeline}
+
+
+# ── T3-2e: 决策订阅 ─────────────────────────────────────
+
+_subscriptions: set[str] = set()
+
+
+class SubscribeRequest(BaseModel):
+    topic: str
+
+
+@router.post("/subscribe", summary="订阅话题")
+def subscribe_topic(request: SubscribeRequest):
+    _subscriptions.add(request.topic)
+    return {"status": "ok", "topic": request.topic, "total": len(_subscriptions)}
+
+
+@router.get("/subscribe", summary="列出订阅")
+def list_subscriptions():
+    return {"topics": list(_subscriptions)}
+
+
+@router.delete("/subscribe", summary="取消订阅")
+def unsubscribe_topic(topic: str):
+    _subscriptions.discard(topic)
+    return {"status": "ok", "topic": topic, "total": len(_subscriptions)}
+
+
 @router.get("/decisions/recent", summary="最近决策列表")
 def recent_decisions(limit: int = 10, db: Session = Depends(get_db)):
     """浏览最近 N 条团队决策（供飞书 @机器人 最近有什么决策 查询）"""

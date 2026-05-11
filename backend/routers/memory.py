@@ -560,6 +560,54 @@ def list_trash(limit: int = 50, db: Session = Depends(get_db)):
     return trash[:limit]
 
 
+@router.post("/{memory_id}/dismiss", summary="降权记忆")
+def dismiss_memory(memory_id: str, db: Session = Depends(get_db)):
+    """不删除只惩罚，降低未来搜索排名"""
+    if not _has_db(db):
+        for m in temp_memory_storage:
+            if m["id"] == memory_id:
+                meta = m.get("metadata") or {}
+                meta["dismiss_count"] = int(meta.get("dismiss_count", 0) or 0) + 1
+                m["metadata"] = meta
+                return {"status": "ok", "dismiss_count": meta["dismiss_count"]}
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    db_memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not db_memory:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    meta = _metadata_from_json(db_memory.memory_metadata)
+    meta["dismiss_count"] = int(meta.get("dismiss_count", 0) or 0) + 1
+    db_memory.memory_metadata = _metadata_to_json(meta)
+    db.commit()
+    return {"status": "ok", "dismiss_count": meta["dismiss_count"]}
+
+
+@router.post("/{memory_id}/feedback", summary="搜索反馈")
+def feedback_memory(memory_id: str, useful: bool = True, db: Session = Depends(get_db)):
+    """记录搜索结果是否有用，影响未来排序"""
+    if not _has_db(db):
+        for m in temp_memory_storage:
+            if m["id"] == memory_id:
+                meta = m.get("metadata") or {}
+                if useful:
+                    meta["useful_count"] = int(meta.get("useful_count", 0) or 0) + 1
+                else:
+                    meta["not_useful_count"] = int(meta.get("not_useful_count", 0) or 0) + 1
+                m["metadata"] = meta
+                return {"status": "ok", "useful": useful}
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    db_memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not db_memory:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    meta = _metadata_from_json(db_memory.memory_metadata)
+    if useful:
+        meta["useful_count"] = int(meta.get("useful_count", 0) or 0) + 1
+    else:
+        meta["not_useful_count"] = int(meta.get("not_useful_count", 0) or 0) + 1
+    db_memory.memory_metadata = _metadata_to_json(meta)
+    db.commit()
+    return {"status": "ok", "useful": useful}
+
+
 @router.post("/{memory_id}/restore", summary="恢复记忆")
 def restore_memory(memory_id: str, db: Session = Depends(get_db)):
     """从回收站恢复记忆"""

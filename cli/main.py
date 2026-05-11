@@ -742,6 +742,139 @@ def alias_delete(name: str = typer.Argument(..., help="别名")):
         typer.echo(f"❌ 未知别名: {name}")
 
 
+# ── T3-2a: dismiss 降权 ──────────────────────────────────
+
+@app.command()
+def dismiss(memory_id: str = typer.Argument(..., help="记忆ID")):
+    """对不相关的搜索结果降权，不删除只惩罚"""
+    try:
+        r = _request("POST", f"/memory/{memory_id}/dismiss")
+        r.raise_for_status()
+        typer.echo(f"👎 已降权: {memory_id}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-2b: 搜索反馈 ──────────────────────────────────────
+
+@app.command()
+def feedback(
+    memory_id: str = typer.Argument(..., help="记忆ID"),
+    useful: bool = typer.Option(True, "--useful/--not-useful", help="是否有用"),
+):
+    """对搜索结果进行反馈，越用越准"""
+    try:
+        r = _request("POST", f"/memory/{memory_id}/feedback", json={"useful": useful})
+        r.raise_for_status()
+        typer.echo(f"{'👍' if useful else '👎'} 反馈已记录: {memory_id}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-2d: 决策时间线 ────────────────────────────────────
+
+@app.command()
+def timeline(topic: str = typer.Argument(..., help="话题关键词")):
+    """查看某话题的决策变更时间线"""
+    try:
+        r = _request("GET", "/feishu/decisions/timeline", params={"topic": topic})
+        r.raise_for_status()
+        data = r.json()
+        items = data.get("timeline", [])
+        if not items:
+            typer.echo(f"未找到「{topic}」相关决策")
+            return
+        typer.echo(f"决策时间线 [{topic}]:")
+        for d in items:
+            status_icon = {"active": "✅", "rejected": "❌", "pending": "⏳"}.get(d.get("status", ""), "📋")
+            superseded = " ⬅ 已被覆盖" if d.get("superseded_by") else ""
+            typer.echo(f"  {status_icon} {d.get('conclusion','')[:60]}{superseded}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-2e: 决策订阅 ──────────────────────────────────────
+
+subscribe_app = typer.Typer(help="决策订阅管理")
+app.add_typer(subscribe_app, name="subscribe")
+
+
+@subscribe_app.command("add")
+def sub_add(topic: str = typer.Argument(..., help="订阅话题，如 API,数据库,部署")):
+    """订阅话题，相关决策变化时通知"""
+    try:
+        r = _request("POST", "/feishu/subscribe", json={"topic": topic})
+        r.raise_for_status()
+        typer.echo(f"🔔 已订阅: {topic}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+@subscribe_app.command("list")
+def sub_list():
+    """列出当前订阅"""
+    try:
+        r = _request("GET", "/feishu/subscribe")
+        r.raise_for_status()
+        topics = r.json().get("topics", [])
+        if not topics:
+            typer.echo("暂无订阅")
+            return
+        typer.echo("当前订阅:")
+        for t in topics:
+            typer.echo(f"  🔔 {t}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+@subscribe_app.command("remove")
+def sub_remove(topic: str = typer.Argument(..., help="取消订阅的话题")):
+    """取消订阅"""
+    try:
+        r = _request("DELETE", "/feishu/subscribe", params={"topic": topic})
+        r.raise_for_status()
+        typer.echo(f"🔕 已取消: {topic}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-2f: 记忆关联图谱 ──────────────────────────────────
+
+@app.command()
+def related(query: str = typer.Argument(..., help="搜索关键词")):
+    """搜索记忆并附带关联决策"""
+    try:
+        r = _request("GET", "/memory/search", params={"query": query, "limit": 5})
+        r.raise_for_status()
+        results = r.json()
+        if not results:
+            typer.echo("❌ 未找到相关记忆")
+            return
+        typer.echo("相关记忆:")
+        for i, m in enumerate(results, 1):
+            typer.echo(f"  {i}. {m.get('content','')[:70]}")
+            meta = m.get("metadata") or {}
+            if meta.get("topic"):
+                typer.echo(f"     关联话题: {meta['topic']}")
+
+        # 查找关联决策
+        try:
+            dr = _request("GET", "/feishu/decisions/recent", params={"limit": 5})
+            dr.raise_for_status()
+            decisions = dr.json().get("decisions", [])
+            related_dec = [d for d in decisions if any(
+                t.lower() in (d.get("conclusion","") or "").lower() for t in query.split()
+            )]
+            if related_dec:
+                typer.echo(f"\n关联决策 ({len(related_dec)} 条):")
+                for d in related_dec[:3]:
+                    typer.echo(f"  📋 {d.get('topic','?')}: {d.get('conclusion','')[:60]}")
+        except Exception:
+            pass
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
 if __name__ == "__main__":
     _load_aliases()
     app()

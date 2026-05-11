@@ -139,6 +139,20 @@ mem restore <memory_id>
 mem alias save kp "kubectl get pods -n prod"
 mem alias run kp
 mem alias list
+
+# 降权 / 反馈（越用越准）
+mem dismiss <memory_id>
+mem feedback <memory_id> --useful
+
+# 决策时间线
+mem timeline "部署"
+
+# 话题订阅
+mem subscribe add "API"
+mem subscribe list
+
+# 关联图谱
+mem related "部署"
 ```
 
 ### 飞书机器人
