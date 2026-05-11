@@ -177,9 +177,10 @@ mem workflow run "生产健康检查"
 │   └── mock.py         # SDK Mock 模式（免飞书凭证可演示）
 ├── demo/               # 演示脚本和素材
 ├── scripts/            # 工具脚本
-│   ├── preflight_check.py  # 环境自检
-│   ├── reset_db.py         # 数据库重置
-│   └── view_database.py    # 数据库查询
+│   ├── preflight_check.py   # 环境自检
+│   ├── reset_db.py          # 数据库重置
+│   ├── benchmark_search.py  # 搜索性能基准
+│   └── view_database.py     # 数据库查询
 └── tests/              # 测试
 ```
 
@@ -204,6 +205,18 @@ python demo/demo_record.py --start-from 3  # 从阶段 3 继续
 
 ```bash
 FEISHU_MOCK_MODE=1 python demo/demo_story.py --reset-db
+```
+
+### 搜索性能基准
+
+```bash
+# 自动预填 500 条、20 queries × 5 轮
+python scripts/benchmark_search.py --seed 500
+
+# 输出:
+#   搜索性能基准 (100 queries, 500条记忆库):
+#     p50: 12ms | p95: 45ms | p99: 89ms
+#     Embedding: avg 8ms | DB查询: avg 3ms
 ```
 
 ## 许可证
