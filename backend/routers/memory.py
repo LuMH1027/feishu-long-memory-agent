@@ -55,7 +55,7 @@ def _metadata_from_json(raw: Optional[str]) -> dict[str, Any]:
 
 
 def _memory_to_dict(memory: Memory) -> dict[str, Any]:
-    return {
+    result = {
         "id": memory.id,
         "content": memory.content,
         "type": memory.type,
@@ -69,6 +69,11 @@ def _memory_to_dict(memory: Memory) -> dict[str, Any]:
         "expire_at": memory.expire_at.isoformat() if memory.expire_at else None,
         "hit_count": memory.hit_count or 0,
     }
+    # 携带向量相似度（用于可解释性）
+    similarity = getattr(memory, "similarity_score", None)
+    if similarity is not None:
+        result["similarity"] = similarity
+    return result
 
 
 def _memory_from_payload(payload: MemoryStoreRequest) -> dict[str, Any]:
@@ -280,6 +285,83 @@ def _directory_score(metadata: dict[str, Any], request_directory: Optional[str])
     return best_score
 
 
+def _explain_result(result: dict[str, Any], query: str, directory: Optional[str] = None) -> list[str]:
+    """为单个搜索结果生成排序理由（前 3 个最强因子）"""
+    reasons: list[tuple[float, str]] = []
+    content = str(result.get("content", ""))
+    content_lower = content.lower()
+    query_lower = query.lower()
+    metadata = result.get("metadata") or {}
+
+    # 前缀匹配
+    if content_lower.startswith(query_lower):
+        reasons.append((0.9, f"前缀匹配:{query}"))
+
+    # 语义相似度
+    similarity = result.get("similarity") or result.get("similarity_score", 0.0)
+    if similarity and float(similarity) > 0.01:
+        reasons.append((float(similarity), f"语义相似:{float(similarity):.2f}"))
+
+    # 目录匹配
+    dir_score = _directory_score(metadata, directory)
+    if dir_score > 0:
+        reasons.append((dir_score, f"目录匹配:{dir_score:.0%}"))
+
+    # keyword match
+    kw_score = _memory_search_score(result, query)
+    if kw_score > 0 and kw_score < 100:
+        reasons.append((min(kw_score / 100, 0.5), f"关键词匹配:{kw_score}"))
+
+    # 决策优先
+    status = metadata.get("status", "active")
+    if result.get("type") == "project_decision" and status == "active":
+        preferred = metadata.get("preferred_terms", [])
+        if preferred:
+            reasons.append((0.7, f"飞书决策优先:{','.join(preferred[:2])}"))
+    if status == "inactive" or status == "rejected":
+        reasons.append((-0.5, "已废弃"))
+
+    # 使用次数
+    count = int(metadata.get("count", 0) or 0)
+    if count >= 10:
+        reasons.append((0.6, f"使用:{count}次"))
+    elif count > 0:
+        reasons.append((0.3, f"使用:{count}次"))
+
+    # 成功率
+    success = int(metadata.get("success_count", 0) or 0)
+    failure = int(metadata.get("failure_count", 0) or 0)
+    total = success + failure
+    if total >= 5:
+        rate = success / total * 100
+        reasons.append((0.4, f"成功率:{rate:.0f}%"))
+
+    # 时效性
+    last_used = metadata.get("last_used_at")
+    if last_used:
+        try:
+            from datetime import datetime
+            days = (datetime.now() - datetime.fromisoformat(str(last_used))).days
+            if days == 0:
+                reasons.append((0.5, "今天使用过"))
+            elif days <= 7:
+                reasons.append((0.3, f"{days}天前使用"))
+        except Exception:
+            pass
+
+    # 来源 - 仅飞书决策
+    source = result.get("source")
+    if source in ("feishu_group", "feishu_doc"):
+        chat_id = result.get("team_id") or metadata.get("chat_id")
+        extracted = metadata.get("extracted_at") or metadata.get("confirmed_at")
+        if extracted:
+            reasons.append((0.2, f"来源:飞书群{':' + str(chat_id)[:8] if chat_id else ''}"))
+
+    # 按权重排序，取前 4
+    reasons.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in reasons[:4]]
+
+
 def _sort_and_limit(
     results: list[dict[str, Any]],
     query: str,
@@ -296,6 +378,9 @@ def _sort_and_limit(
         ),
         reverse=True,
     )
+    # 附加可解释性
+    for r in results[:limit]:
+        r["score_breakdown"] = _explain_result(r, query, directory)
     return results[:limit]
 
 

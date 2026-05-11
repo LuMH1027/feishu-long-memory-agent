@@ -85,6 +85,7 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         "source": result.get("source") or metadata.get("source"),
         "team_id": result.get("team_id") or metadata.get("chat_id") or metadata.get("team_id"),
         "extracted_at": metadata.get("extracted_at"),
+        "score_breakdown": result.get("score_breakdown", []),
     }
 
 
@@ -231,6 +232,9 @@ def search(
         for i, result in enumerate(results, 1):
             typer.echo(f"\n{i}. {result['content']}")
             typer.echo(f"   描述：{result.get('description', '无描述')}")
+            breakdown = result.get("score_breakdown", [])
+            if breakdown:
+                typer.echo(f"   理由: {' | '.join(breakdown)}")
             source = result.get("source")
             if source in ("feishu_group", "feishu_doc"):
                 parts = ["来源：飞书群决议"]
