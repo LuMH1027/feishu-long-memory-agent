@@ -506,6 +506,22 @@ def retrieve_memories(request: MemoryRetrieveRequest, db: Session = Depends(get_
     return _search_db(db, request.query, None, request.top_k or 5)
 
 
+# 必须在 /{memory_id} 前注册，否则 "trash" 会匹配为 memory_id
+@router.get("/trash", summary="回收站列表")
+def list_trash(limit: int = 50, db: Session = Depends(get_db)):
+    """查看已软删除的记忆"""
+    if not _has_db(db):
+        items = [m for m in temp_memory_storage if (m.get("metadata") or {}).get("status") == "deleted"]
+        return items[:limit]
+    results = db.query(Memory).all()
+    trash = []
+    for m in results:
+        meta = _metadata_from_json(m.memory_metadata)
+        if meta.get("status") == "deleted":
+            trash.append(_memory_to_dict(m))
+    return trash[:limit]
+
+
 @router.get("/{memory_id}", summary="获取单个记忆详情")
 def get_memory(memory_id: str, db: Session = Depends(get_db)):
     if not _has_db(db):
@@ -542,22 +558,6 @@ def delete_memory(memory_id: str, db: Session = Depends(get_db)):
     db_memory.memory_metadata = _metadata_to_json(metadata)
     db.commit()
     return {"status": "ok", "message": "记忆已移至回收站", "memory_id": memory_id}
-
-
-@router.get("/trash", summary="回收站列表")
-def list_trash(limit: int = 50, db: Session = Depends(get_db)):
-    """查看已软删除的记忆"""
-    if not _has_db(db):
-        items = [m for m in temp_memory_storage if (m.get("metadata") or {}).get("status") == "deleted"]
-        return items[:limit]
-
-    results = db.query(Memory).all()
-    trash = []
-    for m in results:
-        meta = _metadata_from_json(m.memory_metadata)
-        if meta.get("status") == "deleted":
-            trash.append(_memory_to_dict(m))
-    return trash[:limit]
 
 
 @router.post("/{memory_id}/dismiss", summary="降权记忆")

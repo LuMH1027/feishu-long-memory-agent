@@ -628,32 +628,45 @@ def unsubscribe_topic(topic: str):
 def recent_decisions(limit: int = 10, db: Session = Depends(get_db)):
     """浏览最近 N 条团队决策（供飞书 @机器人 最近有什么决策 查询）"""
     if not _has_db(db):
-        items = [
-            item for item in memory.temp_memory_storage
-            if item.get("type") == "project_decision"
-            and (item.get("metadata") or {}).get("status", "active") != "inactive"
-        ][:limit]
-        return {"count": len(items), "decisions": items}
+        # temp mode
+        items = []
+        for item in memory.temp_memory_storage:
+            meta = item.get("metadata") or {}
+            if item.get("type") == "project_decision" and meta.get("status", "active") != "inactive":
+                items.append({
+                    "id": item.get("id", ""),
+                    "topic": meta.get("topic", ""),
+                    "conclusion": item.get("content", ""),
+                    "project": meta.get("project"),
+                    "status": meta.get("status", "active"),
+                    "extracted_at": meta.get("extracted_at", ""),
+                })
+        return {"count": len(items), "decisions": items[:limit]}
 
-    results = (
-        db.query(Memory)
-        .filter(Memory.type == "project_decision")
-        .order_by(Memory.updated_at.desc())
-        .limit(limit)
-        .all()
-    )
+    # 查询最近决策：先取足够多行，再在 Python 层过滤 status
+    from sqlalchemy import text
+    rows = db.execute(
+        text("SELECT id, content, type, memory_metadata, updated_at FROM memories "
+             "WHERE type = :type_val ORDER BY updated_at DESC LIMIT :lim"),
+        {"type_val": "project_decision", "lim": max(limit * 10, 200)}
+    ).fetchall()
+
     decisions = []
-    for m in results:
-        meta = _metadata_from_json(m.memory_metadata)
-        if meta.get("status", "active") in ("active", "pending"):
+    for row in rows:
+        meta = _metadata_from_json(row.memory_metadata)
+        st = meta.get("status", "active")
+        if st in ("active", "pending"):
             decisions.append({
-                "id": m.id,
+                "id": row.id,
                 "topic": meta.get("topic", ""),
-                "conclusion": m.content,
+                "conclusion": row.content,
                 "project": meta.get("project"),
-                "status": meta.get("status", "active"),
+                "status": st,
                 "extracted_at": meta.get("extracted_at", ""),
             })
+            if len(decisions) >= limit:
+                break
+    return {"count": len(decisions), "decisions": decisions}
     return {"count": len(decisions), "decisions": decisions}
 
 
@@ -682,13 +695,16 @@ def handle_reaction_event(message_id: str, emoji: str, db: Session = Depends(get
 @router.post("/event/callback")
 async def feishu_event_callback(request: Request, db: Session = Depends(get_db)):
     """飞书事件回调接口：校验签名，并对消息事件做决策提取或知识查询。"""
-    signature = request.headers.get("X-Lark-Signature")
-    timestamp = request.headers.get("X-Lark-Request-Timestamp")
-    nonce = request.headers.get("X-Lark-Request-Nonce")
-    body = await request.body()
-
-    if not validate_signature(os.getenv("FEISHU_VERIFICATION_TOKEN"), timestamp, nonce, body, signature):
-        raise HTTPException(status_code=403, detail="签名验证失败")
+    # 本地开发/测试模式跳过签名验证
+    env = os.getenv("ENVIRONMENT", "")
+    mock = os.getenv("FEISHU_MOCK_MODE", "").lower() in {"1", "true", "yes", "on"}
+    if not mock and env != "development":
+        signature = request.headers.get("X-Lark-Signature")
+        timestamp = request.headers.get("X-Lark-Request-Timestamp")
+        nonce = request.headers.get("X-Lark-Request-Nonce")
+        body = await request.body()
+        if not validate_signature(os.getenv("FEISHU_VERIFICATION_TOKEN"), timestamp, nonce, body, signature):
+            raise HTTPException(status_code=403, detail="签名验证失败")
 
     event_data = await request.json()
     if event_data.get("type") == "url_verification":
@@ -737,13 +753,14 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             return {"action": "decision_rejected", "memory_id": memory_id, "reason": "用户打回"}
 
     # — LLM 意图分类（优先）—
+    intent_result = {}
     if _use_llm_extraction():
         try:
             from core.decision_extractor import classify_message_intent
             intent_result = classify_message_intent(content)
             intent = intent_result.get("intent", "chat")
         except Exception:
-            intent = "chat"
+            intent = None  # LLM 失败 → 回退规则模式
     else:
         intent = None  # 回退到规则模式
 

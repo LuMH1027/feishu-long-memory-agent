@@ -213,7 +213,7 @@ def list(limit: int = 10):
 
 @app.command()
 def search(
-    query: str = typer.Argument(..., help="搜索关键词"),
+    query: str = typer.Argument(..., help="Search query"),
     limit: int = typer.Option(5, help="返回结果数量"),
     execute: bool = typer.Option(False, help="直接执行第一个匹配的命令"),
     copy: bool = typer.Option(False, help="直接复制第一个匹配的命令到剪贴板"),
@@ -476,7 +476,7 @@ def save_workflow(
 
 
 @workflow_app.command("list")
-def list_workflows(limit: int = typer.Option(10, help="返回数量")):
+def list_workflows(limit: int = typer.Option(10, help="Number to return")):
     """列出已保存的工作流"""
     try:
         response = _request("GET", "/cli/command/list", params={"limit": limit, "type": "cli_workflow"})
@@ -560,46 +560,51 @@ def stats():
     vec = comp.get("vector_db", {})
     emb = comp.get("embedding", {})
     m = metrics.get("metrics", {})
+    acc = m.get("accuracy", {})
+    eff = m.get("efficiency", {})
+    imp = eff.get("improvement", {})
+    bef = eff.get("before", {})
+    aft = eff.get("after", {})
 
     def icon(ok: bool) -> str:
-        return "✅" if ok else "❌"
+        return "[OK]" if ok else "[FAIL]"
 
-    typer.echo(f"""
-  ╔══════════════════════════════════════╗
-  ║       企业级记忆引擎 · 仪表盘        ║
-  ╠══════════════════════════════════════╣
-  ║ {icon(db.get('status')=='ok')} 关系数据库  {db.get('memory_count','?'):>6} 条记忆  {db.get('decision_count','?'):>4} 条决策 ║
-  ║ {icon(vec.get('status')=='ok')} 向量数据库  {vec.get('vector_count','?'):>6} 条向量               ║
-  ║ {icon(emb.get('status')=='ok')} Embedding  {emb.get('model','?'):>20}                 ║
-  ╠══════════════════════════════════════╣
-  ║ 准确率  Hit@1={m.get('accuracy',{}).get('hit_at_1','?')}  矛盾={m.get('accuracy',{}).get('contradiction_win_rate','?')}                     ║
-  ║ 测试    通过率={m.get('test_coverage',{}).get('pass_rate','?')}                           ║
-  ║ 效率    输入-{m.get('efficiency',{}).get('improvement',{}).get('input_chars','?')}  步数-{m.get('efficiency',{}).get('improvement',{}).get('steps','?')}  时间-{m.get('efficiency',{}).get('improvement',{}).get('time_seconds','?')} ║
-  ╚══════════════════════════════════════╝
-""")
+    typer.echo("=" * 40)
+    typer.echo("  企业级记忆引擎 - 仪表盘")
+    typer.echo("=" * 40)
+    typer.echo(f"  {icon(db.get('status')=='ok')} 关系数据库: {db.get('memory_count','?')} 记忆, {db.get('decision_count','?')} 决策")
+    typer.echo(f"  {icon(vec.get('status')=='ok')} 向量数据库: {vec.get('vector_count','?')} 向量")
+    typer.echo(f"  {icon(emb.get('status')=='ok')} Embedding: {emb.get('model','?')}")
+    typer.echo(f"  准确率: Hit@1={acc.get('hit_at_1','?')}")
+    typer.echo(f"  测试通过率: {m.get('test_coverage',{}).get('pass_rate','?')}")
+    typer.echo(f"  效率改善: 输入={imp.get('input_chars','?')} | 步数={imp.get('steps','?')} | 时间={imp.get('time_seconds','?')}")
+    typer.echo(f"  使用前: {bef.get('input_chars','?')} 字符 / {bef.get('steps','?')} 步 / {bef.get('time_seconds','?')}s")
+    typer.echo(f"  使用后: {aft.get('input_chars','?')} 字符 / {aft.get('steps','?')} 步 / {aft.get('time_seconds','?')}s")
+    typer.echo("=" * 40)
 
 
-# ── T3-1b: 速记 ──────────────────────────────────────────
+
+# ── T3-1b: note ──────────────────────────────────────────
 
 @app.command()
-def note(content: str = typer.Argument(..., help="便签内容")):
-    """快速记一条便签，无需指定类型"""
+def note(content: str = typer.Argument(..., help="Note content")):
+    """Quick note, no type needed"""
     try:
         r = _request("POST", "/memory/extract", json={
             "content": content, "type": "note", "source": "cli",
             "user_id": os.getenv("USER", "local_user"),
         })
         r.raise_for_status()
-        typer.echo(f"📝 已记录: {content[:60]}{'...' if len(content) > 60 else ''}")
+        typer.echo(f"Saved: {content[:60]}{'...' if len(content) > 60 else ''}")
     except Exception as e:
-        typer.echo(f"❌ {e}", err=True)
+        typer.echo(f"Err: {e}", err=True)
 
 
 # ── T3-1c: recent / popular ──────────────────────────────
 
 @app.command()
-def recent(limit: int = typer.Option(10, help="返回数量")):
-    """最近更新的记忆"""
+def recent(limit: int = typer.Option(10, help="Number to return")):
+    """Show recently updated memories"""
     try:
         r = _request("GET", "/memory/list", params={"limit": limit})
         r.raise_for_status()
@@ -615,8 +620,8 @@ def recent(limit: int = typer.Option(10, help="返回数量")):
 
 
 @app.command()
-def popular(limit: int = typer.Option(10, help="返回数量")):
-    """最常使用的记忆（按命中次数排序）"""
+def popular(limit: int = typer.Option(10, help="Number to return")):
+    """Show most frequently used memories"""
     try:
         r = _request("GET", "/memory/list", params={"limit": 50})
         r.raise_for_status()
@@ -635,7 +640,7 @@ def popular(limit: int = typer.Option(10, help="返回数量")):
 # ── T3-1d: 软删除 ────────────────────────────────────────
 
 @app.command()
-def delete(memory_id: str = typer.Argument(..., help="记忆ID")):
+def delete(memory_id: str = typer.Argument(..., help="Memory ID")):
     """软删除一条记忆（可恢复）"""
     try:
         r = _request("DELETE", f"/memory/{memory_id}")
@@ -663,7 +668,7 @@ def trash():
 
 
 @app.command()
-def restore(memory_id: str = typer.Argument(..., help="记忆ID")):
+def restore(memory_id: str = typer.Argument(..., help="Memory ID")):
     """从回收站恢复记忆"""
     try:
         r = _request("POST", f"/memory/{memory_id}/restore")
@@ -698,7 +703,7 @@ app.add_typer(alias_app, name="alias")
 
 
 @alias_app.command("save")
-def alias_save(name: str = typer.Argument(..., help="别名"), command: str = typer.Argument(..., help="完整命令")):
+def alias_save(name: str = typer.Argument(..., help="Alias name"), command: str = typer.Argument(..., help="Full command")):
     """保存命令别名"""
     _load_aliases()
     _alias_data[name] = command
@@ -718,7 +723,7 @@ def alias_list():
 
 
 @alias_app.command("run")
-def alias_run(name: str = typer.Argument(..., help="别名")):
+def alias_run(name: str = typer.Argument(..., help="Alias name")):
     """执行别名对应的命令"""
     _load_aliases()
     cmd = _alias_data.get(name)
@@ -731,7 +736,7 @@ def alias_run(name: str = typer.Argument(..., help="别名")):
 
 
 @alias_app.command("delete")
-def alias_delete(name: str = typer.Argument(..., help="别名")):
+def alias_delete(name: str = typer.Argument(..., help="Alias name")):
     """删除别名"""
     _load_aliases()
     if name in _alias_data:
@@ -745,7 +750,7 @@ def alias_delete(name: str = typer.Argument(..., help="别名")):
 # ── T3-2a: dismiss 降权 ──────────────────────────────────
 
 @app.command()
-def dismiss(memory_id: str = typer.Argument(..., help="记忆ID")):
+def dismiss(memory_id: str = typer.Argument(..., help="Memory ID")):
     """对不相关的搜索结果降权，不删除只惩罚"""
     try:
         r = _request("POST", f"/memory/{memory_id}/dismiss")
@@ -759,7 +764,7 @@ def dismiss(memory_id: str = typer.Argument(..., help="记忆ID")):
 
 @app.command()
 def feedback(
-    memory_id: str = typer.Argument(..., help="记忆ID"),
+    memory_id: str = typer.Argument(..., help="Memory ID"),
     useful: bool = typer.Option(True, "--useful/--not-useful", help="是否有用"),
 ):
     """对搜索结果进行反馈，越用越准"""
@@ -774,7 +779,7 @@ def feedback(
 # ── T3-2d: 决策时间线 ────────────────────────────────────
 
 @app.command()
-def timeline(topic: str = typer.Argument(..., help="话题关键词")):
+def timeline(topic: str = typer.Argument(..., help="Topic keyword")):
     """查看某话题的决策变更时间线"""
     try:
         r = _request("GET", "/feishu/decisions/timeline", params={"topic": topic})
@@ -800,7 +805,7 @@ app.add_typer(subscribe_app, name="subscribe")
 
 
 @subscribe_app.command("add")
-def sub_add(topic: str = typer.Argument(..., help="订阅话题，如 API,数据库,部署")):
+def sub_add(topic: str = typer.Argument(..., help="Topic like API,db,deploy")):
     """订阅话题，相关决策变化时通知"""
     try:
         r = _request("POST", "/feishu/subscribe", json={"topic": topic})
@@ -828,7 +833,7 @@ def sub_list():
 
 
 @subscribe_app.command("remove")
-def sub_remove(topic: str = typer.Argument(..., help="取消订阅的话题")):
+def sub_remove(topic: str = typer.Argument(..., help="Topic to unsubscribe")):
     """取消订阅"""
     try:
         r = _request("DELETE", "/feishu/subscribe", params={"topic": topic})
@@ -841,7 +846,7 @@ def sub_remove(topic: str = typer.Argument(..., help="取消订阅的话题")):
 # ── T3-2f: 记忆关联图谱 ──────────────────────────────────
 
 @app.command()
-def related(query: str = typer.Argument(..., help="搜索关键词")):
+def related(query: str = typer.Argument(..., help="Search query")):
     """搜索记忆并附带关联决策"""
     try:
         r = _request("GET", "/memory/search", params={"query": query, "limit": 5})
