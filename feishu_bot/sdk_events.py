@@ -115,5 +115,10 @@ def create_ws_client(app_id: Optional[str] = None, app_secret: Optional[str] = N
 
 
 def start_ws_client(app_id: Optional[str] = None, app_secret: Optional[str] = None, on_message: Optional[MessageHandler] = None) -> None:
+    from feishu_bot.mock import should_use_mock
+    if should_use_mock():
+        from feishu_bot.mock import mock_start_ws_client
+        mock_start_ws_client()
+        return
     client = create_ws_client(app_id=app_id, app_secret=app_secret, on_message=on_message)
     client.start()

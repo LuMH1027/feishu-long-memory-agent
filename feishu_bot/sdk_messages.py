@@ -7,6 +7,11 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 
+def _use_mock() -> bool:
+    from feishu_bot.mock import should_use_mock
+    return should_use_mock()
+
+
 def _credentials(app_id: Optional[str] = None, app_secret: Optional[str] = None) -> tuple[str, str]:
     resolved_app_id = app_id or os.getenv("FEISHU_APP_ID")
     resolved_app_secret = app_secret or os.getenv("FEISHU_APP_SECRET")
@@ -37,6 +42,10 @@ def send_text_message(
     """使用飞书官方 Python SDK 以机器人身份发送群文本消息。"""
     if not chat_id:
         return {"status": "skipped", "reason": "缺少 chat_id"}
+
+    if _use_mock():
+        from feishu_bot.mock import mock_send_text_message
+        return mock_send_text_message(chat_id, text)
 
     try:
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
@@ -97,6 +106,10 @@ def send_interactive_message(
     """
     if not chat_id:
         return {"status": "skipped", "reason": "缺少 chat_id"}
+
+    if _use_mock():
+        from feishu_bot.mock import mock_send_card_message
+        return mock_send_card_message(chat_id, card)
 
     try:
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody

@@ -77,8 +77,12 @@ cp .env.example .env
 ### 启动
 
 ```bash
-# 初始化数据库
-python init_db.py
+# 运行环境自检（可选但推荐）
+python scripts/preflight_check.py
+
+# 初始化/重置数据库
+python scripts/reset_db.py        # 重置并重建
+python scripts/reset_db.py --no-reinit  # 仅清空不重建
 
 # 启动后端
 uvicorn backend.main:app --reload --port 8000
@@ -164,9 +168,13 @@ mem workflow run "生产健康检查"
 ├── feishu_bot/         # 飞书机器人
 │   ├── sdk_events.py   # WebSocket 事件处理
 │   ├── sdk_messages.py # 消息发送（文本/卡片）
-│   └── card_templates.py # 卡片模板
+│   ├── card_templates.py # 卡片模板
+│   └── mock.py         # SDK Mock 模式（免飞书凭证可演示）
 ├── demo/               # 演示脚本和素材
 ├── scripts/            # 工具脚本
+│   ├── preflight_check.py  # 环境自检
+│   ├── reset_db.py         # 数据库重置
+│   └── view_database.py    # 数据库查询
 └── tests/              # 测试
 ```
 
@@ -176,11 +184,19 @@ mem workflow run "生产健康检查"
 # 全自动日志（截图友好，一条命令跑完 12 步）
 python demo/auto_log.py --reset-db
 
-# 交互式录屏（有暂停提示，适合录视频）
+# 断点续跑：第 5 步出错了，从第 5 步继续（跳过重置保留已有数据）
+python demo/auto_log.py --start-from 5
+
+# 交互式录屏（有暂停提示，适合录视频，5 个阶段）
 python demo/demo_record.py --reset-db
+python demo/demo_record.py --start-from 3   # 从阶段 3 继续
 ```
 
-详见 [demo/README.md](demo/README.md)。
+**飞书 Mock 模式**：未安装 `lark-oapi` 或未配置飞书凭证时，自动切换到消息模拟输出。也可手动开启：
+
+```bash
+FEISHU_MOCK_MODE=1 python demo/auto_log.py --reset-db
+```
 
 ## 许可证
 

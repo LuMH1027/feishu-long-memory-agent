@@ -31,7 +31,42 @@
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai)",
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -m pip install --upgrade openai -i https://pypi.org/simple/)",
       "Bash(D:/anaconda3/envs/mem_agent_env/python.exe -c ' *)",
-      "Bash(netstat -ano)"
+      "Bash(netstat -ano)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -sL https://raw.githubusercontent.com/anthropics/skills/main/skills/skill-creator/SKILL.md)",
+      "Bash(gh api *)",
+      "Bash(npx --yes @anthropic-ai/claude-code-skills install garrytan/gstack)",
+      "Bash(npx --yes skills install garrytan/gstack)",
+      "Bash(npx --yes skills remove garrytan/gstack)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -sL https://raw.githubusercontent.com/garrytan/gstack/main/README.md)",
+      "Bash(bun --version)",
+      "Bash(powershell -Command \"irm bun.sh/install.ps1 | iex\")",
+      "Bash(git clone *)",
+      "Bash(ls ~/.claude/skills/gstack/setup 2>/dev/null && echo \"Setup script found\")",
+      "Read(//c/Users/29749/.claude/skills/gstack/**)",
+      "Bash(cat /c/Users/29749/AppData/Local/Temp/claude/e--feishu-long-memory-agent/a700c237-8b88-4d48-9a8c-886c6ab80478/tasks/bcc0ei1u6.output 2>/dev/null | tail -10)",
+      "Read(//c/Users/29749/AppData/Local/Temp/claude/e--feishu-long-memory-agent/a700c237-8b88-4d48-9a8c-886c6ab80478/tasks/**)",
+      "Bash(export BUN_INSTALL=\"$HOME/.bun\")",
+      "Bash(curl -fsSL https://bun.sh/install)",
+      "Bash(bash)",
+      "Bash(npm install *)",
+      "Bash(bash ./setup)",
+      "Bash(ls -la ~/.claude/skills/ 2>/dev/null | head -20)",
+      "Read(//c/Users/29749/.claude/skills/**)",
+      "Bash(export HTTP_PROXY=\"http://127.0.0.1:7897\")",
+      "Bash(export HTTPS_PROXY=\"http://127.0.0.1:7897\")",
+      "Bash(export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1)",
+      "Bash(./setup)",
+      "Skill(review)",
+      "Skill(review:*)",
+      "Bash(python scripts/preflight_check.py)",
+      "Bash(FEISHU_MOCK_MODE=1 python -c ' *)",
+      "Bash(ls /c/Users/29749/.claude/projects/e--feishu-long-memory-agent/memory/ 2>/dev/null || echo \"No memory dir\")",
+      "Read(//c/Users/29749/.claude/projects/e--feishu-long-memory-agent/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\29749\\.gstack\\projects\\LuMH1027-feishu-long-memory-agent"
     ]
   }
 }

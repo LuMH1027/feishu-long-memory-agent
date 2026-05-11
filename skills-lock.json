@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "gstack": {
+      "source": "garrytan/gstack",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "8872b4bd1d6efc59da2fb62c31d5905651541d3dd2ba12cc85d645ed34a26859"
+    }
+  }
+}
