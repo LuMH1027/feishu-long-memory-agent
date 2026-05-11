@@ -543,5 +543,205 @@ def clear(force: bool = False):
     except Exception as e:
         typer.echo(f"❌ 清空失败: {str(e)}", err=True)
 
+# ── T3-1a: 仪表盘 ──────────────────────────────────────
+
+@app.command()
+def stats():
+    """系统仪表盘：一键查看记忆全貌"""
+    try:
+        health = _request("GET", "/health/detailed").json()
+        metrics = _request("GET", "/health/metrics").json()
+    except Exception:
+        typer.echo("❌ 无法连接后端")
+        return
+
+    comp = health.get("components", {})
+    db = comp.get("database", {})
+    vec = comp.get("vector_db", {})
+    emb = comp.get("embedding", {})
+    m = metrics.get("metrics", {})
+
+    def icon(ok: bool) -> str:
+        return "✅" if ok else "❌"
+
+    typer.echo(f"""
+  ╔══════════════════════════════════════╗
+  ║       企业级记忆引擎 · 仪表盘        ║
+  ╠══════════════════════════════════════╣
+  ║ {icon(db.get('status')=='ok')} 关系数据库  {db.get('memory_count','?'):>6} 条记忆  {db.get('decision_count','?'):>4} 条决策 ║
+  ║ {icon(vec.get('status')=='ok')} 向量数据库  {vec.get('vector_count','?'):>6} 条向量               ║
+  ║ {icon(emb.get('status')=='ok')} Embedding  {emb.get('model','?'):>20}                 ║
+  ╠══════════════════════════════════════╣
+  ║ 准确率  Hit@1={m.get('accuracy',{}).get('hit_at_1','?')}  矛盾={m.get('accuracy',{}).get('contradiction_win_rate','?')}                     ║
+  ║ 测试    通过率={m.get('test_coverage',{}).get('pass_rate','?')}                           ║
+  ║ 效率    输入-{m.get('efficiency',{}).get('improvement',{}).get('input_chars','?')}  步数-{m.get('efficiency',{}).get('improvement',{}).get('steps','?')}  时间-{m.get('efficiency',{}).get('improvement',{}).get('time_seconds','?')} ║
+  ╚══════════════════════════════════════╝
+""")
+
+
+# ── T3-1b: 速记 ──────────────────────────────────────────
+
+@app.command()
+def note(content: str = typer.Argument(..., help="便签内容")):
+    """快速记一条便签，无需指定类型"""
+    try:
+        r = _request("POST", "/memory/extract", json={
+            "content": content, "type": "note", "source": "cli",
+            "user_id": os.getenv("USER", "local_user"),
+        })
+        r.raise_for_status()
+        typer.echo(f"📝 已记录: {content[:60]}{'...' if len(content) > 60 else ''}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-1c: recent / popular ──────────────────────────────
+
+@app.command()
+def recent(limit: int = typer.Option(10, help="返回数量")):
+    """最近更新的记忆"""
+    try:
+        r = _request("GET", "/memory/list", params={"limit": limit})
+        r.raise_for_status()
+        items = r.json()
+        if not items:
+            typer.echo("暂无记忆")
+            return
+        for mem in items:
+            t = mem.get("updated_at", "")[:19] or ""
+            typer.echo(f"  [{t}]  {mem.get('content', '')[:80]}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+@app.command()
+def popular(limit: int = typer.Option(10, help="返回数量")):
+    """最常使用的记忆（按命中次数排序）"""
+    try:
+        r = _request("GET", "/memory/list", params={"limit": 50})
+        r.raise_for_status()
+        items = r.json()
+        items.sort(key=lambda x: x.get("hit_count", 0), reverse=True)
+        if not items:
+            typer.echo("暂无记忆")
+            return
+        for mem in items[:limit]:
+            hc = mem.get("hit_count", 0)
+            typer.echo(f"  [{hc}次]  {mem.get('content', '')[:80]}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-1d: 软删除 ────────────────────────────────────────
+
+@app.command()
+def delete(memory_id: str = typer.Argument(..., help="记忆ID")):
+    """软删除一条记忆（可恢复）"""
+    try:
+        r = _request("DELETE", f"/memory/{memory_id}")
+        r.raise_for_status()
+        typer.echo(f"🗑️  已移至回收站: {memory_id}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+@app.command()
+def trash():
+    """查看回收站"""
+    try:
+        r = _request("GET", "/memory/trash")
+        r.raise_for_status()
+        items = r.json()
+        if not items:
+            typer.echo("回收站为空")
+            return
+        typer.echo(f"回收站 ({len(items)} 条):")
+        for mem in items:
+            typer.echo(f"  [{mem.get('id','?')[:8]}]  {mem.get('content','')[:60]}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+@app.command()
+def restore(memory_id: str = typer.Argument(..., help="记忆ID")):
+    """从回收站恢复记忆"""
+    try:
+        r = _request("POST", f"/memory/{memory_id}/restore")
+        r.raise_for_status()
+        typer.echo(f"♻️ 已恢复: {memory_id}")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+
+
+# ── T3-1e: alias ─────────────────────────────────────────
+
+_alias_data: dict[str, str] = {}
+_ALIAS_CONFIG = CONFIG_DIR / "aliases.json"
+
+
+def _load_aliases():
+    global _alias_data
+    if _ALIAS_CONFIG.exists():
+        try:
+            _alias_data = json.loads(_ALIAS_CONFIG.read_text(encoding="utf-8"))
+        except Exception:
+            _alias_data = {}
+
+
+def _save_aliases():
+    CONFIG_DIR.mkdir(exist_ok=True)
+    _ALIAS_CONFIG.write_text(json.dumps(_alias_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+alias_app = typer.Typer(help="命令别名管理")
+app.add_typer(alias_app, name="alias")
+
+
+@alias_app.command("save")
+def alias_save(name: str = typer.Argument(..., help="别名"), command: str = typer.Argument(..., help="完整命令")):
+    """保存命令别名"""
+    _load_aliases()
+    _alias_data[name] = command
+    _save_aliases()
+    typer.echo(f"✅ {name} → {command}")
+
+
+@alias_app.command("list")
+def alias_list():
+    """列出所有别名"""
+    _load_aliases()
+    if not _alias_data:
+        typer.echo("暂无别名")
+        return
+    for name, cmd in _alias_data.items():
+        typer.echo(f"  {name} → {cmd}")
+
+
+@alias_app.command("run")
+def alias_run(name: str = typer.Argument(..., help="别名")):
+    """执行别名对应的命令"""
+    _load_aliases()
+    cmd = _alias_data.get(name)
+    if not cmd:
+        typer.echo(f"❌ 未知别名: {name}")
+        return
+    typer.echo(f"🚀 {cmd}")
+    completed = subprocess.run(cmd, shell=True)
+    _record_command_usage(cmd, getattr(completed, "returncode", None))
+
+
+@alias_app.command("delete")
+def alias_delete(name: str = typer.Argument(..., help="别名")):
+    """删除别名"""
+    _load_aliases()
+    if name in _alias_data:
+        del _alias_data[name]
+        _save_aliases()
+        typer.echo(f"🗑️  已删除: {name}")
+    else:
+        typer.echo(f"❌ 未知别名: {name}")
+
+
 if __name__ == "__main__":
+    _load_aliases()
     app()

@@ -563,6 +563,39 @@ def reject_decision(memory_id: str, db: Session = Depends(get_db)):
     return _reject_decision(memory_id, db)
 
 
+@router.get("/decisions/recent", summary="最近决策列表")
+def recent_decisions(limit: int = 10, db: Session = Depends(get_db)):
+    """浏览最近 N 条团队决策（供飞书 @机器人 最近有什么决策 查询）"""
+    if not _has_db(db):
+        items = [
+            item for item in memory.temp_memory_storage
+            if item.get("type") == "project_decision"
+            and (item.get("metadata") or {}).get("status", "active") != "inactive"
+        ][:limit]
+        return {"count": len(items), "decisions": items}
+
+    results = (
+        db.query(Memory)
+        .filter(Memory.type == "project_decision")
+        .order_by(Memory.updated_at.desc())
+        .limit(limit)
+        .all()
+    )
+    decisions = []
+    for m in results:
+        meta = _metadata_from_json(m.memory_metadata)
+        if meta.get("status", "active") in ("active", "pending"):
+            decisions.append({
+                "id": m.id,
+                "topic": meta.get("topic", ""),
+                "conclusion": m.content,
+                "project": meta.get("project"),
+                "status": meta.get("status", "active"),
+                "extracted_at": meta.get("extracted_at", ""),
+            })
+    return {"count": len(decisions), "decisions": decisions}
+
+
 @router.post("/decision/reaction", summary="处理 Reaction 事件")
 def handle_reaction_event(message_id: str, emoji: str, db: Session = Depends(get_db)):
     """处理飞书 Reaction 事件：👍 确认 / 👎 打回"""
@@ -710,7 +743,19 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             reply = _send_group_text(message.chat_id, fallback_text)
         return {"action": "clarification_needed", "intent_result": intent_result, "reply": reply}
 
-    # — 路由：query —
+    # — 路由：query / 最近决策 —
+    if "最近" in content and ("决策" in content or "决定" in content):
+        decisions = recent_decisions(5, db)
+        items = decisions.get("decisions", [])
+        if items and _auto_reply_enabled():
+            lines = ["最近团队决策："] + [
+                f"  [{d.get('status','?')}] {d.get('topic','?')}: {d.get('conclusion','?')[:60]}"
+                for d in items
+            ]
+            reply = _send_group_text(message.chat_id, "\n".join(lines))
+            return {"action": "recent_decisions", "count": len(items), "reply": reply}
+        return {"action": "recent_decisions", "count": len(items)}
+
     if intent == "query" or (intent is None and (message.mentioned or is_query_message(content))):
         cards = _query_related_cards(content, 3, db)
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}

@@ -520,18 +520,68 @@ def get_memory(memory_id: str, db: Session = Depends(get_db)):
     return _memory_to_dict(memory)
 
 
-@router.delete("/{memory_id}", summary="删除记忆")
+@router.delete("/{memory_id}", summary="软删除记忆")
 def delete_memory(memory_id: str, db: Session = Depends(get_db)):
+    """软删除：标记为 deleted，7天内可恢复"""
     if not _has_db(db):
-        before_count = len(temp_memory_storage)
-        temp_memory_storage[:] = [memory for memory in temp_memory_storage if memory["id"] != memory_id]
-        if len(temp_memory_storage) == before_count:
-            raise HTTPException(status_code=404, detail="记忆不存在")
-        return {"status": "ok", "message": "记忆删除成功"}
-
-    if not storage.delete_memory(db, memory_id):
+        for memory in temp_memory_storage:
+            if memory["id"] == memory_id:
+                metadata = memory.get("metadata") or {}
+                metadata["status"] = "deleted"
+                metadata["deleted_at"] = _now_iso()
+                memory["metadata"] = metadata
+                return {"status": "ok", "message": "记忆已移至回收站"}
         raise HTTPException(status_code=404, detail="记忆不存在")
-    return {"status": "ok", "message": "记忆删除成功"}
+
+    db_memory = retriever.get_memory_by_id(db, memory_id) if hasattr(retriever, 'get_memory_by_id') else db.query(Memory).filter(Memory.id == memory_id).first()
+    if not db_memory:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    metadata = _metadata_from_json(db_memory.memory_metadata)
+    metadata["status"] = "deleted"
+    metadata["deleted_at"] = _now_iso()
+    db_memory.memory_metadata = _metadata_to_json(metadata)
+    db.commit()
+    return {"status": "ok", "message": "记忆已移至回收站", "memory_id": memory_id}
+
+
+@router.get("/trash", summary="回收站列表")
+def list_trash(limit: int = 50, db: Session = Depends(get_db)):
+    """查看已软删除的记忆"""
+    if not _has_db(db):
+        items = [m for m in temp_memory_storage if (m.get("metadata") or {}).get("status") == "deleted"]
+        return items[:limit]
+
+    results = db.query(Memory).all()
+    trash = []
+    for m in results:
+        meta = _metadata_from_json(m.memory_metadata)
+        if meta.get("status") == "deleted":
+            trash.append(_memory_to_dict(m))
+    return trash[:limit]
+
+
+@router.post("/{memory_id}/restore", summary="恢复记忆")
+def restore_memory(memory_id: str, db: Session = Depends(get_db)):
+    """从回收站恢复记忆"""
+    if not _has_db(db):
+        for memory in temp_memory_storage:
+            if memory["id"] == memory_id:
+                metadata = memory.get("metadata") or {}
+                metadata.pop("status", None)
+                metadata.pop("deleted_at", None)
+                memory["metadata"] = metadata
+                return {"status": "ok", "message": "记忆已恢复"}
+        raise HTTPException(status_code=404, detail="记忆不存在")
+
+    db_memory = db.query(Memory).filter(Memory.id == memory_id).first()
+    if not db_memory:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    metadata = _metadata_from_json(db_memory.memory_metadata)
+    metadata.pop("status", None)
+    metadata.pop("deleted_at", None)
+    db_memory.memory_metadata = _metadata_to_json(metadata)
+    db.commit()
+    return {"status": "ok", "message": "记忆已恢复", "memory_id": memory_id}
 
 
 @router.delete("/", summary="清空所有记忆")

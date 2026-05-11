@@ -119,6 +119,26 @@ mem workflow save "生产健康检查" "docker ps -a" "kubectl get pods -n prod"
 
 # 执行工作流
 mem workflow run "生产健康检查"
+
+# 仪表盘（系统全貌一瞥）
+mem stats
+
+# 速记便签（无需 --type）
+mem note "今晚8点记得备份数据库"
+
+# 最近更新 / 最常使用
+mem recent --limit 10
+mem popular --limit 10
+
+# 软删除 + 回收站 + 恢复
+mem delete <memory_id>
+mem trash
+mem restore <memory_id>
+
+# 命令别名
+mem alias save kp "kubectl get pods -n prod"
+mem alias run kp
+mem alias list
 ```
 
 ### 飞书机器人
@@ -135,6 +155,8 @@ mem workflow run "生产健康检查"
 | 普通闲聊 | `今天天气不错` | 忽略，不回复 |
 
 > 设置 `USE_LLM_DECISION_EXTRACTION=1` 启用 LLM 意图分类，替代关键词规则。
+
+**更多飞书功能**：机器人入群自动发送欢迎介绍；`@机器人 最近有什么决策` 浏览历史决策。
 
 ### 飞书决策卡片
 

@@ -108,17 +108,45 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
         except Exception:
             pass
 
+    def handle_bot_added(event) -> None:
+        """机器人被拉入群时发送欢迎消息"""
+        event_body = _get_attr(event, "event", event)
+        chat_id = _get_attr(event_body, "chat_id", "")
+        if not chat_id:
+            return
+        welcome = (
+            "👋 我是企业级记忆引擎机器人！\n\n"
+            "我可以在群聊中：\n"
+            "  📋 自动识别并记录团队决策\n"
+            "  🔍 检索历史命令和决策\n"
+            "  🔄 检测矛盾决策并更新\n\n"
+            "试试 @我 说：\n"
+            "  · 「以后统一用 XXX」— 记录新决策\n"
+            "  · 「之前XX怎么部署的？」— 查询历史\n"
+            "  · 「不对，改成YYY」— 修正决策"
+        )
+        try:
+            from feishu_bot.sdk_messages import send_text_message
+            send_text_message(chat_id=chat_id, text=welcome)
+        except Exception:
+            pass
+
     try:
         from lark_oapi.api.im.v1 import P2ImMessageReactionV1
-        return (
+        builder = (
             lark.EventDispatcherHandler.builder(
                 os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
                 os.getenv("FEISHU_ENCRYPT_KEY", ""),
             )
             .register_p2_im_message_receive_v1(handle_message)
             .register_p2_im_message_reaction_v1(handle_reaction)
-            .build()
         )
+        try:
+            from lark_oapi.api.im.v1 import P2ImChatMemberBotAddedV1
+            builder = builder.register_p2_im_chat_member_bot_added_v1(handle_bot_added)
+        except (ImportError, AttributeError):
+            pass
+        return builder.build()
     except (ImportError, AttributeError):
         # 旧版 lark-oapi 可能没有 P2ImMessageReactionV1
         return (
