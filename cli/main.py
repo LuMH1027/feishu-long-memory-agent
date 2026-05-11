@@ -82,6 +82,9 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         "type": result.get("type") or metadata.get("type"),
         "description": result.get("description") or result.get("summary") or "无描述",
         "metadata": metadata,
+        "source": result.get("source") or metadata.get("source"),
+        "team_id": result.get("team_id") or metadata.get("chat_id") or metadata.get("team_id"),
+        "extracted_at": metadata.get("extracted_at"),
     }
 
 
@@ -228,6 +231,16 @@ def search(
         for i, result in enumerate(results, 1):
             typer.echo(f"\n{i}. {result['content']}")
             typer.echo(f"   描述：{result.get('description', '无描述')}")
+            source = result.get("source")
+            if source in ("feishu_group", "feishu_doc"):
+                parts = ["来源：飞书群决议"]
+                chat_id = result.get("team_id")
+                if chat_id:
+                    parts.append(f"群聊：{chat_id}")
+                t = result.get("extracted_at")
+                if t:
+                    parts.append(f"时间：{t[:19]}")
+                typer.echo(f"   {' | '.join(parts)}")
             typer.echo(f"   使用次数：{result.get('metadata', {}).get('count', 0)}")
 
         if not sys.stdin.isatty():
@@ -278,8 +291,13 @@ def suggest(
         suggestions = response.json().get("suggestions", [])
         for item in suggestions[:limit]:
             command = item.get("command")
-            if command:
-                typer.echo(command)
+            if not command:
+                continue
+            tags = item.get("decision_tags", [])
+            if tags:
+                for tag in tags:
+                    typer.echo(f"  [{tag}]")
+            typer.echo(command)
     except Exception as e:
         typer.echo(f"推荐失败: {str(e)}", err=True)
 

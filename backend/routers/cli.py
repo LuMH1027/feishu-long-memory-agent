@@ -200,14 +200,53 @@ def _command_haystack(command: str, metadata: dict) -> str:
     return f"{command} {pattern_part}".lower()
 
 
-def _command_to_suggestion(memory: Memory) -> dict:
+def _decision_tags_for(command: str, request: CommandSuggestRequest, decision_metadata_list: list[dict]) -> list[str]:
+    """返回命令在决策影响下的标签，如 [决策优先] [已废弃]"""
+    tags: list[str] = []
+    command_lower = command.lower()
+    for metadata in decision_metadata_list:
+        if not _is_active_decision_metadata(metadata):
+            continue
+        if not _decision_applies_to_command(command, request, metadata):
+            continue
+        preferred = [str(t).lower() for t in metadata.get("preferred_terms", []) if t]
+        rejected = [str(t).lower() for t in metadata.get("rejected_terms", []) if t]
+        chat_id = metadata.get("chat_id", "")
+        topic = metadata.get("topic", "")
+        if any(t and t in command_lower for t in preferred):
+            tag = "决策优先"
+            if topic:
+                tag += f"({topic})"
+            if chat_id:
+                tag += f" @{chat_id}"
+            tags.append(tag)
+        if any(t and t in command_lower for t in rejected):
+            tag = "已废弃"
+            if topic:
+                tag += f"({topic})"
+            if chat_id:
+                tag += f" @{chat_id}"
+            tags.append(tag)
+    return tags
+
+
+def _command_to_suggestion(
+    memory: Memory,
+    decision_metadata_list: list[dict] = None,
+    request: CommandSuggestRequest = None,
+) -> dict:
     metadata = _metadata_from_json(memory.memory_metadata)
-    return {
+    result = {
         "command": memory.content,
         "description": memory.description or f"{metadata.get('shell', 'shell')}命令",
         "count": metadata.get("count", 0),
         "last_used": metadata.get("last_used_at"),
     }
+    if decision_metadata_list and request:
+        tags = _decision_tags_for(memory.content, request, decision_metadata_list)
+        if tags:
+            result["decision_tags"] = tags
+    return result
 
 
 def _is_active_decision_metadata(metadata: dict) -> bool:
@@ -326,7 +365,7 @@ async def suggest_command(request: CommandSuggestRequest, db: Session = Depends(
             if _matches_command_memory(memory.content, _metadata_from_json(memory.memory_metadata), request.partial_command)
         ]
         results.sort(key=lambda memory: _suggestion_sort_key(memory, request, decision_metadata_list), reverse=True)
-        return {"suggestions": [_command_to_suggestion(memory) for memory in results]}
+        return {"suggestions": [_command_to_suggestion(memory, decision_metadata_list, request) for memory in results]}
 
     # 搜索相关命令
     decision_metadata_list = _temp_decision_metadata()
