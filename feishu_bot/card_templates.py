@@ -28,7 +28,12 @@ def _button(text: str, value: dict[str, Any], button_type: str = "primary") -> d
             "content": text
         },
         "type": button_type,
-        "value": value
+        "value": value,
+        "confirm": {
+            "title": {"tag": "plain_text", "content": "操作确认"},
+            "text": {"tag": "plain_text", "content": f"确认要 {text} 吗？操作后按钮将失效。"},
+        },
+        # 飞书卡片按钮点击后自动变灰（disabled），无需额外配置
     }
 
 
@@ -63,9 +68,11 @@ def decision_card(
     created_at: Optional[str] = None,
     memory_id: Optional[str] = None,
     status: str = "active",
+    supersedes: Optional[list[str]] = None,
+    superseded_by: Optional[str] = None,
 ) -> dict[str, Any]:
     """
-    创建决策卡片
+    创建决策卡片 — 蓝色 #3370FF
 
     Args:
         topic: 决策主题
@@ -76,10 +83,9 @@ def decision_card(
         rejected_terms: 废弃的术语/方案
         created_at: 记录时间
         memory_id: 记忆ID
-        status: 决策状态 (pending=待确认, active=已确认)
-
-    Returns:
-        飞书交互卡片JSON
+        status: 决策状态 (pending=待确认, active=已确认, rejected=已打回)
+        supersedes: 被此决策覆盖的旧决策ID列表
+        superseded_by: 覆盖此决策的新决策ID
     """
     is_pending = status == "pending"
     elements = []
@@ -140,13 +146,20 @@ def decision_card(
         buttons = []
         if memory_id:
             buttons.append(_button("查看详情", {"action": "view_detail", "memory_id": memory_id}, "default"))
-        buttons.append(_button("确认采纳", {"action": "confirm_decision", "topic": topic}, "primary"))
+        if supersedes or superseded_by:
+            buttons.append(_button("查看历史版本", {
+                "action": "view_history",
+                "memory_id": memory_id or "",
+                "supersedes": supersedes or [],
+                "superseded_by": superseded_by or "",
+            }, "default"))
         if buttons:
             elements.append({
                 "tag": "action",
                 "actions": buttons
             })
 
+    # 蓝色 #3370FF
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -154,7 +167,7 @@ def decision_card(
                 "tag": "plain_text",
                 "content": f"{'⏳' if is_pending else '📋'} {'待确认' if is_pending else '团队决策'}：{topic}"
             },
-            "template": "blue"
+            "template": "blue"  # #3370FF
         },
         "elements": elements
     }
@@ -238,6 +251,7 @@ def cli_command_card(
         "actions": buttons
     })
 
+    # 绿色 #00B578
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -245,7 +259,7 @@ def cli_command_card(
                 "tag": "plain_text",
                 "content": "💻 CLI命令推荐"
             },
-            "template": "green"
+            "template": "green"  # #00B578
         },
         "elements": elements
     }
@@ -307,6 +321,7 @@ def workflow_card(
         "actions": buttons
     })
 
+    # 紫色 #7B3FF2
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -314,7 +329,7 @@ def workflow_card(
                 "tag": "plain_text",
                 "content": f"🔄 工作流：{name}"
             },
-            "template": "purple"
+            "template": "purple"  # #7B3FF2
         },
         "elements": elements
     }
@@ -367,6 +382,8 @@ def memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
         created_at=created_at,
         memory_id=memory_id,
         status=metadata.get("status", "active"),
+        supersedes=metadata.get("supersedes"),
+        superseded_by=metadata.get("superseded_by"),
     )
 
 
