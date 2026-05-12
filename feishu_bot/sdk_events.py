@@ -28,6 +28,123 @@ def _message_text(message: Any) -> str:
     return str(parsed.get("text") or raw_content)
 
 
+def _card_action_value(action: Any) -> dict[str, Any]:
+    if not action:
+        return {}
+    if isinstance(action, str):
+        try:
+            parsed = json.loads(action)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    if isinstance(action, dict):
+        value = action.get("value")
+        if isinstance(value, dict):
+            return value
+        return action
+
+    value = getattr(action, "value", None)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def _card_action_field(action_value: Any, key: str, default: Any = "") -> Any:
+    if isinstance(action_value, dict):
+        return action_value.get(key, default)
+    return getattr(action_value, key, default)
+
+
+def _processed_decision_card(action_type: str, memory_id: str) -> dict[str, Any]:
+    confirmed = action_type == "confirm_decision"
+    status_text = "已确认采纳" if confirmed else "已打回"
+    template = "green" if confirmed else "red"
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": f"决策流程已结束：{status_text}"},
+        },
+        "elements": [
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"该决策已经**{status_text}**，后续不能重复确认或打回。\n\nmemory_id: `{memory_id}`",
+                },
+            },
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "确认采纳"},
+                        "type": "primary",
+                        "disabled": True,
+                        "value": {"action": "confirm_decision", "memory_id": memory_id},
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "打回"},
+                        "type": "danger",
+                        "disabled": True,
+                        "value": {"action": "reject_decision", "memory_id": memory_id},
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def _card_action_toast(toast_type: str, content: str, card: Optional[dict[str, Any]] = None) -> Any:
+    payload = {"toast": {"type": toast_type, "content": content}}
+    if card is not None:
+        payload["card"] = {"type": "raw", "data": card}
+    try:
+        from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
+
+        return P2CardActionTriggerResponse(payload)
+    except ModuleNotFoundError:
+        return payload
+
+
+def _execute_card_action(action_value: dict[str, Any], backend_url: Optional[str] = None) -> tuple[str, str, Optional[dict[str, Any]]]:
+    action_type = _card_action_field(action_value, "action", "")
+    memory_id = _card_action_field(action_value, "memory_id", "")
+    base_url = (backend_url or os.getenv("MEM_AGENT_BACKEND_URL") or "http://127.0.0.1:8000").rstrip("/")
+
+    if action_type in ("confirm_decision", "reject_decision") and not memory_id:
+        return "error", "操作失败：卡片缺少 memory_id", None
+
+    endpoints = {
+        "confirm_decision": ("/api/v1/feishu/decision/confirm", "已确认采纳该决策"),
+        "reject_decision": ("/api/v1/feishu/decision/reject", "已打回该决策"),
+    }
+    if action_type in endpoints:
+        endpoint, success_message = endpoints[action_type]
+        response = requests.post(f"{base_url}{endpoint}", params={"memory_id": memory_id}, timeout=5)
+        response.raise_for_status()
+        result = response.json()
+        print(f"[SDK事件] 卡片操作后端响应: action={action_type} result={result}", flush=True)
+        if result.get("status") == "ok":
+            return "success", success_message, _processed_decision_card(action_type, memory_id)
+        message = result.get("message") or result.get("reason") or result.get("status") or "后端未返回成功"
+        return "error", f"操作失败：{message}", None
+
+    if action_type == "view_detail":
+        return "info", "详情查看暂未接入，请通过查询命令查看该记忆", None
+    if action_type == "view_history":
+        return "info", "历史版本查看暂未接入，请通过查询命令查看", None
+    if action_type in ("copy_command", "execute_command"):
+        return "info", "CLI 操作需要在本地终端执行，飞书卡片暂不直接执行命令", None
+    return "warning", f"未识别的卡片操作：{action_type or '空操作'}", None
+
+
 def event_to_message_payload(event: Any) -> dict[str, Any]:
     """把飞书 SDK 的消息事件对象转换成后端方向B统一消息结构。"""
     event_body = _get_attr(event, "event", event)
@@ -120,37 +237,19 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
         except Exception:
             pass
 
-    def handle_card_action(event) -> None:
+    def handle_card_action(event) -> Any:
         """处理卡片按钮点击事件，转发到后端"""
-        import requests
         event_body = _get_attr(event, "event", event)
-        action_value = _get_attr(event_body, "action", {}) or {}
-        if isinstance(action_value, str):
-            try:
-                import json as _json
-                action_value = _json.loads(action_value)
-            except Exception:
-                action_value = {}
-        action_type = action_value.get("action", "")
-        memory_id = action_value.get("memory_id", "")
-        topic = action_value.get("topic", "")
-        base_url = os.getenv("MEM_AGENT_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
-
-        if action_type == "confirm_decision":
-            if memory_id:
-                requests.post(f"{base_url}/api/v1/feishu/decision/confirm",
-                              params={"memory_id": memory_id}, timeout=5)
-        elif action_type == "reject_decision":
-            if memory_id:
-                requests.post(f"{base_url}/api/v1/feishu/decision/reject",
-                              params={"memory_id": memory_id}, timeout=5)
-        elif action_type == "view_detail":
-            pass  # 需 UI 导航，跳过
-        elif action_type == "view_history":
-            pass  # 需 UI 渲染时间线，跳过
-        elif action_type in ("copy_command", "execute_command"):
-            pass  # CLI 侧操作，跳过
-        # 非关键操作失败静默
+        action_value = _card_action_value(_get_attr(event_body, "action", None))
+        if not isinstance(action_value, dict):
+            print(f"[SDK事件] 卡片回调 action 解析结果不是 dict，跳过: type={type(action_value).__name__}", flush=True)
+            return _card_action_toast("error", "操作失败：无法解析卡片按钮参数")
+        try:
+            toast_type, content, card = _execute_card_action(action_value)
+        except Exception as exc:
+            print(f"[SDK事件] 卡片操作失败: action={action_value} error={exc}", flush=True)
+            return _card_action_toast("error", f"操作失败：{exc}")
+        return _card_action_toast(toast_type, content, card)
 
     def handle_bot_added(event) -> None:
         """机器人被拉入群时发送欢迎消息"""
@@ -185,27 +284,29 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
             .register_p2_im_message_receive_v1(handle_message)
             .register_p2_im_message_reaction_v1(handle_reaction)
         )
-        try:
-            from lark_oapi.api.im.v1 import P2CardActionTrigger
+        if hasattr(builder, "register_p2_card_action_trigger"):
             builder = builder.register_p2_card_action_trigger(handle_card_action)
-        except (ImportError, AttributeError):
-            pass
-        try:
-            from lark_oapi.api.im.v1 import P2ImChatMemberBotAddedV1
+        if hasattr(builder, "register_p2_im_chat_member_bot_added_v1"):
             builder = builder.register_p2_im_chat_member_bot_added_v1(handle_bot_added)
-        except (ImportError, AttributeError):
-            pass
         return builder.build()
     except (ImportError, AttributeError):
         # 旧版 lark-oapi 可能没有 P2ImMessageReactionV1
-        return (
+        builder = (
             lark.EventDispatcherHandler.builder(
                 os.getenv("FEISHU_VERIFICATION_TOKEN", ""),
                 os.getenv("FEISHU_ENCRYPT_KEY", ""),
             )
             .register_p2_im_message_receive_v1(handle_message)
-            .build()
         )
+        if hasattr(builder, "register_p2_im_message_reaction_created_v1"):
+            builder = builder.register_p2_im_message_reaction_created_v1(handle_reaction)
+        if hasattr(builder, "register_p2_im_message_reaction_deleted_v1"):
+            builder = builder.register_p2_im_message_reaction_deleted_v1(handle_reaction)
+        if hasattr(builder, "register_p2_card_action_trigger"):
+            builder = builder.register_p2_card_action_trigger(handle_card_action)
+        if hasattr(builder, "register_p2_im_chat_member_bot_added_v1"):
+            builder = builder.register_p2_im_chat_member_bot_added_v1(handle_bot_added)
+        return builder.build()
 
 
 def create_ws_client(app_id: Optional[str] = None, app_secret: Optional[str] = None, on_message: Optional[MessageHandler] = None):

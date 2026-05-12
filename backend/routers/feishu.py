@@ -549,6 +549,9 @@ def _confirm_decision(memory_id: str, db: Optional[Session] = None) -> dict[str,
         record = db.query(MemoryModel).filter(MemoryModel.id == memory_id).first()
         if record:
             metadata = _metadata_from_json(record.memory_metadata)
+            status = metadata.get("status", "active")
+            if status != "pending":
+                return {"status": "error", "message": f"该决策已处理，当前状态为 {status}", "memory_id": memory_id}
             metadata["status"] = "active"
             metadata["confirmed_at"] = datetime.now().isoformat()
             record.memory_metadata = _metadata_to_json(metadata)
@@ -562,6 +565,9 @@ def _confirm_decision(memory_id: str, db: Optional[Session] = None) -> dict[str,
     for idx, item in enumerate(memory.temp_memory_storage):
         if item.get("id") == memory_id:
             metadata = item.get("metadata") or {}
+            status = metadata.get("status", "active")
+            if status != "pending":
+                return {"status": "error", "message": f"该决策已处理，当前状态为 {status}", "memory_id": memory_id}
             metadata["status"] = "active"
             metadata["confirmed_at"] = datetime.now().isoformat()
             item["metadata"] = metadata
@@ -579,6 +585,9 @@ def _reject_decision(memory_id: str, db: Optional[Session] = None) -> dict[str, 
         record = db.query(MemoryModel).filter(MemoryModel.id == memory_id).first()
         if record:
             metadata = _metadata_from_json(record.memory_metadata)
+            status = metadata.get("status", "active")
+            if status != "pending":
+                return {"status": "error", "message": f"该决策已处理，当前状态为 {status}", "memory_id": memory_id}
             metadata["status"] = "rejected"
             metadata["rejected_at"] = datetime.now().isoformat()
             record.memory_metadata = _metadata_to_json(metadata)
@@ -591,6 +600,9 @@ def _reject_decision(memory_id: str, db: Optional[Session] = None) -> dict[str, 
     for idx, item in enumerate(memory.temp_memory_storage):
         if item.get("id") == memory_id:
             metadata = item.get("metadata") or {}
+            status = metadata.get("status", "active")
+            if status != "pending":
+                return {"status": "error", "message": f"该决策已处理，当前状态为 {status}", "memory_id": memory_id}
             metadata["status"] = "rejected"
             metadata["rejected_at"] = datetime.now().isoformat()
             item["metadata"] = metadata

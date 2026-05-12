@@ -157,6 +157,39 @@ mem related "部署"
 
 ### 飞书机器人
 
+#### 启动飞书长连接
+
+飞书 SDK 通过 WebSocket 实时接收群聊消息。在 `.env` 中配置好飞书凭证后执行：
+
+```bash
+# 先确认后端已经在运行
+uvicorn backend.main:app --port 8000
+
+# 另开终端，启动飞书事件监听
+python scripts/run_feishu_sdk_events.py
+```
+
+**前置条件**：
+
+| 条件 | 检查方式 |
+|------|---------|
+| `lark-oapi` 已安装 | `pip list | grep lark-oapi` |
+| `.env` 中 `FEISHU_APP_ID` 已配置 | 不能是 `your_xxx` 占位值 |
+| `.env` 中 `FEISHU_APP_SECRET` 已配置 | 不能是 `your_xxx` 占位值 |
+| 飞书应用已启用**事件订阅** | 飞书开放平台 → 应用 → 事件订阅 |
+| 飞书应用已订阅 `im.message.receive_v1` | 事件订阅配置页 |
+| 飞书应用已发布上线（或配置了测试群） | 飞书开放平台 → 应用 → 安全设置 |
+
+**自动 Mock 模式**：如果 `lark-oapi` 未安装或飞书凭证未配置，启动脚本会自动切到 Mock 模式——消息仅打印到终端，不会连接真实飞书。Mock 模式下可使用 HTTP API 直接测试：
+```bash
+# 模拟飞书群消息（Mock 模式下使用）
+curl -X POST http://127.0.0.1:8000/api/v1/feishu/message/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"content":"以后统一用 Jest 做单元测试","chat_id":"demo","user_id":"alice"}'
+```
+
+#### 机器人行为
+
 在群聊中 @机器人 发送消息，系统自动判断消息意图（规则模式）或 LLM 7 类分类：
 
 | 消息类型 | 示例 | 机器人行为 |
@@ -172,7 +205,7 @@ mem related "部署"
 
 **更多飞书功能**：机器人入群自动发送欢迎介绍；`@机器人 最近有什么决策` 浏览历史决策。
 
-### 飞书决策卡片
+#### 飞书决策卡片
 
 机器人推送待确认决策卡片，通过 Reaction 实现人审机决：
 
