@@ -63,7 +63,12 @@ def post_message_to_backend(payload: dict[str, Any], backend_url: Optional[str] 
 
 
 def _default_message_handler(payload: dict[str, Any]) -> dict[str, Any]:
-    return post_message_to_backend(payload)
+    result = post_message_to_backend(payload)
+    action = result.get("action", "?")
+    intent = result.get("intent", "?")
+    print(f"[SDK事件] 后端响应: action={action} intent={intent} "
+          f"keys={list(result.keys())[:6]}", flush=True)
+    return result
 
 
 def build_event_handler(on_message: Optional[MessageHandler] = None):
@@ -81,8 +86,15 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
 
     def handle_message(event: P2ImMessageReceiveV1) -> None:
         payload = event_to_message_payload(event)
-        if payload.get("content"):
+        content = payload.get("content", "")
+        if content:
+            print(f"[SDK事件] 收到消息: chat_id={payload.get('chat_id')} "
+                  f"user_id={payload.get('user_id')} "
+                  f"mentioned={payload.get('mentioned')} "
+                  f"content={content[:100]}", flush=True)
             handler(payload)
+        else:
+            print(f"[SDK事件] 收到空内容消息，跳过: chat_id={payload.get('chat_id')}", flush=True)
 
     def handle_reaction(event) -> None:
         """处理飞书消息 Reaction 事件，转发到后端 /decision/reaction"""
@@ -107,6 +119,38 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
             )
         except Exception:
             pass
+
+    def handle_card_action(event) -> None:
+        """处理卡片按钮点击事件，转发到后端"""
+        import requests
+        event_body = _get_attr(event, "event", event)
+        action_value = _get_attr(event_body, "action", {}) or {}
+        if isinstance(action_value, str):
+            try:
+                import json as _json
+                action_value = _json.loads(action_value)
+            except Exception:
+                action_value = {}
+        action_type = action_value.get("action", "")
+        memory_id = action_value.get("memory_id", "")
+        topic = action_value.get("topic", "")
+        base_url = os.getenv("MEM_AGENT_BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+
+        if action_type == "confirm_decision":
+            if memory_id:
+                requests.post(f"{base_url}/api/v1/feishu/decision/confirm",
+                              params={"memory_id": memory_id}, timeout=5)
+        elif action_type == "reject_decision":
+            if memory_id:
+                requests.post(f"{base_url}/api/v1/feishu/decision/reject",
+                              params={"memory_id": memory_id}, timeout=5)
+        elif action_type == "view_detail":
+            pass  # 需 UI 导航，跳过
+        elif action_type == "view_history":
+            pass  # 需 UI 渲染时间线，跳过
+        elif action_type in ("copy_command", "execute_command"):
+            pass  # CLI 侧操作，跳过
+        # 非关键操作失败静默
 
     def handle_bot_added(event) -> None:
         """机器人被拉入群时发送欢迎消息"""
@@ -141,6 +185,11 @@ def build_event_handler(on_message: Optional[MessageHandler] = None):
             .register_p2_im_message_receive_v1(handle_message)
             .register_p2_im_message_reaction_v1(handle_reaction)
         )
+        try:
+            from lark_oapi.api.im.v1 import P2CardActionTrigger
+            builder = builder.register_p2_card_action_trigger(handle_card_action)
+        except (ImportError, AttributeError):
+            pass
         try:
             from lark_oapi.api.im.v1 import P2ImChatMemberBotAddedV1
             builder = builder.register_p2_im_chat_member_bot_added_v1(handle_bot_added)

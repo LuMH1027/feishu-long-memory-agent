@@ -337,6 +337,24 @@ def workflow_card(
     }
 
 
+def _looks_like_cli(item: dict[str, Any]) -> bool:
+    """判断一条记忆是否应该渲染为 CLI 命令卡片"""
+    # 来源是 CLI 且类型不是决策
+    if item.get("source") == "cli" and item.get("type") != "project_decision":
+        return True
+    # 内容以常见命令前缀开头
+    content = item.get("content", "")
+    cmd_prefixes = ("docker", "kubectl", "git ", "npm ", "pip ", "python", "curl",
+                     "ssh ", "rsync", "systemctl", "conda", "mem ", "pg_", "mysql",
+                     "redis", "java ", "go ", "cargo", "make ", "cmake")
+    if any(content.lower().startswith(p) for p in cmd_prefixes):
+        return True
+    # metadata 中有 shell 字段
+    if (item.get("metadata") or {}).get("shell"):
+        return True
+    return False
+
+
 def memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
     """
     将记忆数据转换为飞书交互卡片
@@ -361,8 +379,8 @@ def memory_to_card(item: dict[str, Any]) -> dict[str, Any]:
             memory_id=memory_id
         )
 
-    # CLI命令
-    if item.get("type") == "cli_command":
+    # CLI命令 — 精确 type 或来源 cli + 内容像命令
+    if item.get("type") == "cli_command" or _looks_like_cli(item):
         return cli_command_card(
             command=item.get("content", ""),
             description=item.get("description"),

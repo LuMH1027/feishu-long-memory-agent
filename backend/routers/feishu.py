@@ -31,6 +31,45 @@ _pending_decisions: dict[str, str] = {}  # message_id → memory_id
 _pending_reactions: dict[str, dict[str, int]] = {}  # message_id → {emoji: count}
 PENDING_TIMEOUT_SECONDS = 300  # 5 分钟无人操作自动确认
 
+# 待澄清上下文: chat_id → 原始模糊消息
+# 当用户回答追问时，合并原始消息和回答一起做决策提取
+_pending_clarifications: dict[str, str] = {}  # chat_id → original_vague_message
+CLARIFICATION_TTL_SECONDS = 120  # 2 分钟后自动清除
+
+# 消息去重: 飞书 SDK WebSocket 和 Webhook 回调可能同时接收同一事件，
+# 且同一消息可能以不同 message_id 多次投递，因此同时用 content+chat_id 做去重
+import threading
+import time as _time
+_seen_keys: dict[str, float] = {}  # 去重key → 过期时间戳
+_SEEN_TTL_SECONDS = 30  # 30 秒后自动清理
+_seen_lock = threading.Lock()
+
+
+def _is_duplicate_message(message_id: Optional[str], content: str, chat_id: Optional[str] = None) -> bool:
+    """检查消息是否已处理过（基于 content+chat_id 去重，message_id 为辅）"""
+    now = _time.time()
+    content_key = f"content:{chat_id or '??'}:{hash(content)}"
+    with _seen_lock:
+        # 清理过期条目
+        expired = [k for k, ts in _seen_keys.items() if ts < now]
+        for k in expired:
+            del _seen_keys[k]
+
+        # 主去重: content + chat_id 哈希
+        if content_key in _seen_keys:
+            return True
+
+        # 辅去重: message_id (同一ID的重复投递)
+        if message_id:
+            msg_key = f"msg:{message_id}"
+            if msg_key in _seen_keys:
+                return True
+            _seen_keys[msg_key] = now + _SEEN_TTL_SECONDS
+
+        # 记录本条消息
+        _seen_keys[content_key] = now + _SEEN_TTL_SECONDS
+        return False
+
 
 class FeishuMessage(BaseModel):
     content: str
@@ -361,6 +400,7 @@ def _use_llm_extraction() -> bool:
 def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict[str, Any]:
     # 尝试使用LLM抽取，失败时降级为规则抽取
     use_llm = _use_llm_extraction()
+    print(f"[决策入库] 开始: content={request.content[:80]} use_llm={use_llm}", flush=True)
 
     if use_llm:
         try:
@@ -368,6 +408,8 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
             llm_result = extract_decision_with_rules_fallback(request.content, use_llm=True)
 
             if llm_result.get("is_decision"):
+                print(f"[决策入库] LLM判定为决策 topic={llm_result.get('topic')} "
+                      f"confidence={llm_result.get('confidence')}", flush=True)
                 # 使用LLM结果
                 decision = {
                     "topic": llm_result.get("topic", "未知主题"),
@@ -382,13 +424,18 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
                 }
             else:
                 # LLM判断不是决策
+                print(f"[决策入库] LLM判定非决策 confidence={llm_result.get('confidence')}", flush=True)
                 return {"status": "ignored", "reason": "LLM判断不是决策消息", "confidence": llm_result.get("confidence", 0.0)}
-        except Exception:
+        except Exception as e:
             # LLM失败，降级为规则抽取
-            pass
+            print(f"[决策入库] LLM抽取异常，降级为规则抽取: {e}", flush=True)
 
     # 使用规则抽取
+    print(f"[决策入库] 使用规则抽取", flush=True)
     decision = extract_decision(request.content, request.chat_id)
+
+    print(f"[决策入库] 规则提取结果: topic={decision.get('topic')} "
+          f"conclusion={decision.get('conclusion', '')[:60]}", flush=True)
 
     metadata = {
         **request.metadata,
@@ -761,7 +808,12 @@ async def feishu_event_callback(request: Request, db: Session = Depends(get_db))
     if not content:
         return {"status": "ok"}
 
-    message = FeishuMessage(content=content, chat_id=_extract_chat_id(event_data), user_id=_extract_user_id(event_data))
+    message = FeishuMessage(
+        content=content,
+        chat_id=_extract_chat_id(event_data),
+        user_id=_extract_user_id(event_data),
+        message_id=_extract_message_id(event_data),
+    )
     return handle_feishu_message(message, db)
 
 
@@ -791,6 +843,18 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
     """分析群消息：LLM意图分类 → 决策入库 / 查询检索 / 追问澄清 / 忽略。"""
     content = message.content or ""
 
+    print(f"\n{'='*60}", flush=True)
+    print(f"[飞书-入口] 收到消息: content={content[:120]}", flush=True)
+    print(f"[飞书-入口] chat_id={message.chat_id} user_id={message.user_id} "
+          f"msg_id={message.message_id} mentioned={message.mentioned} "
+          f"use_llm={_use_llm_extraction()}", flush=True)
+
+    # ── 去重：SDK WebSocket 和 Webhook 回调可能同时收到同一事件 ──
+    if _is_duplicate_message(message.message_id, content, message.chat_id):
+        print(f"[飞书-入口] ⚠ 重复消息，跳过: msg_id={message.message_id} "
+              f"content_hash={hash(content)}", flush=True)
+        return {"action": "duplicate", "reason": "消息已处理（去重）"}
+
     # 检查文本打回
     reject_keywords = ("打回", "这个不对", "不是这个", "撤回这条", "撤销这条")
     if message.mentioned and any(kw in content for kw in reject_keywords):
@@ -799,22 +863,115 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
             _reject_decision(memory_id)
             return {"action": "decision_rejected", "memory_id": memory_id, "reason": "用户打回"}
 
+    # — 待澄清回答检查：上一条消息触发了追问，当前消息可能是回答 —
+    original_vague = _pending_clarifications.pop(message.chat_id or "", None)
+    if original_vague:
+        print(f"[飞书-澄清] 检测到对追问的回答: "
+              f"original={original_vague[:60]} answer={content[:60]}", flush=True)
+        combined_message = f"{original_vague}（补充说明：{content}）"
+        print(f"[飞书-澄清] 合并消息: {combined_message[:120]}", flush=True)
+        stored = _store_decision_record(
+            DecisionExtractRequest(
+                content=combined_message,
+                chat_id=message.chat_id,
+                user_id=message.user_id,
+                message_id=message.message_id,
+                source=message.source,
+            ),
+            db,
+        )
+        reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
+        if _auto_reply_enabled() and stored.get("status") != "ignored":
+            decision = stored.get("decision", {})
+            memory_id = stored.get("memory", {}).get("id")
+            from feishu_bot.card_templates import decision_card
+            card = decision_card(
+                topic=decision.get("topic", "未知主题"),
+                conclusion=decision.get("conclusion", combined_message),
+                reason=decision.get("reason"),
+                project=decision.get("project"),
+                preferred_terms=decision.get("preferred_terms", []),
+                rejected_terms=decision.get("rejected_terms", []),
+                created_at=datetime.now().isoformat(),
+                memory_id=memory_id,
+                status="pending",
+            )
+            fallback_text = f"待确认决策：{decision.get('conclusion', combined_message)}\n请 👍 确认采纳 / 👎 打回"
+            reply = _send_group_card(message.chat_id, card, fallback_text)
+            reply_msg_id = reply.get("message_id")
+            if reply_msg_id and memory_id:
+                _pending_decisions[reply_msg_id] = memory_id
+        return {"action": "clarification_answer_stored", "original": original_vague,
+                "answer": content, "reply": reply, **stored}
+
     # — LLM 意图分类（优先）—
     intent_result = {}
+    llm_fallback = False
     if _use_llm_extraction():
         try:
             from core.decision_extractor import classify_message_intent
             intent_result = classify_message_intent(content)
             intent = intent_result.get("intent", "chat")
-        except Exception:
-            intent = None  # LLM 失败 → 回退规则模式
+            llm_fallback = intent_result.get("fallback", False)
+            if llm_fallback:
+                intent = None  # LLM 失败 → 回退规则模式
+                print(f"[飞书] LLM 意图分类失败，回退规则模式: "
+                      f"{intent_result.get('fallback_reason', '')[:80]}", flush=True)
+            else:
+                print(f"[飞书-分类] LLM分类结果: intent={intent} "
+                      f"confidence={intent_result.get('confidence')} "
+                      f"clarification_question={intent_result.get('clarification_question', '')[:60]}",
+                      flush=True)
+        except Exception as e:
+            intent = None  # LLM 异常 → 回退规则模式
+            llm_fallback = True
+            print(f"[飞书] LLM 意图分类异常，回退规则模式: {e}", flush=True)
     else:
-        intent = None  # 回退到规则模式
+        intent = None  # 未启用 LLM，使用规则模式
+        print(f"[飞书-分类] LLM未启用，使用规则模式", flush=True)
+    print(f"[飞书-分类] 最终 intent={intent} llm_fallback={llm_fallback}", flush=True)
+
+    # — 路由：decision_confirm —
+    if intent == "decision_confirm":
+        memory_id = _find_pending_for_chat(message.chat_id)
+        if memory_id:
+            _confirm_decision(memory_id, db)
+            print(f"[飞书-路由] intent=decision_confirm → 确认决策 memory_id={memory_id}", flush=True)
+            return {"action": "decision_confirmed", "memory_id": memory_id}
+        print(f"[飞书-路由] intent=decision_confirm → 无待确认决策可加固", flush=True)
+        return {"action": "ignored", "reason": "无待确认决策可加固"}
+
+    # — 路由：unclear（LLM 分类 或 关键词模糊检测）—
+    # 必须在 decision_new/revise/repeal 之前，否则规则模式下模糊指令会被 DECISION_MARKERS 误判为决策
+    _vague_words = ("那个", "这个", "哪个", "新的", "那种", "这种")
+    _is_vague = any(w in content for w in _vague_words)
+    if intent == "unclear" or (intent is None and _is_vague and is_decision_message(content)):
+        reason = (f"LLM判定unclear (confidence={intent_result.get('confidence', '?')})"
+                  if intent == "unclear"
+                  else f"规则检测模糊词: {[w for w in _vague_words if w in content]}")
+        print(f"[飞书-路由] unclear → {reason}", flush=True)
+        # 记录待澄清上下文：用户回答后合并原消息+回答做决策提取
+        if message.chat_id:
+            _pending_clarifications[message.chat_id] = content
+            print(f"[飞书-澄清] 记录待澄清: chat_id={message.chat_id} msg={content[:60]}", flush=True)
+        reply = {"status": "skipped"}
+        if _auto_reply_enabled():
+            question = intent_result.get("clarification_question") if intent_result else None
+            question = question or "你说的是哪种方案？能再具体一点吗？"
+            options = intent_result.get("suggested_options", [])
+            fallback_text = f"🤔 {question}"
+            if options:
+                fallback_text += "\n" + "\n".join(f"  · {o}" for o in options)
+            reply = _send_group_text(message.chat_id, fallback_text)
+        return {"action": "clarification_needed", "intent_result": intent_result, "reply": reply}
 
     # — 路由：decision_new / decision_revise / decision_repeal —
     if intent in ("decision_new", "decision_revise", "decision_repeal") or (
         intent is None and is_decision_message(content)
     ):
+        route_reason = (f"LLM intent={intent}" if intent else
+                        f"规则匹配 DECISION_MARKERS: {[m for m in DECISION_MARKERS if m.lower() in content.lower()]}")
+        print(f"[飞书-路由] decision_store → {route_reason}", flush=True)
         stored = _store_decision_record(
             DecisionExtractRequest(
                 content=content,
@@ -851,28 +1008,9 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 "note": "当前为演示模式，pending 决策需手动确认。自动确认定时器在 T4 企业版中实现",
                 **stored}
 
-    # — 路由：decision_confirm —
-    if intent == "decision_confirm":
-        memory_id = _find_pending_for_chat(message.chat_id)
-        if memory_id:
-            _confirm_decision(memory_id, db)
-            return {"action": "decision_confirmed", "memory_id": memory_id}
-        return {"action": "ignored", "reason": "无待确认决策可加固"}
-
-    # — 路由：unclear —
-    if intent == "unclear":
-        reply = {"status": "skipped"}
-        if _auto_reply_enabled():
-            question = intent_result.get("clarification_question", "能否再详细说明一下？")
-            options = intent_result.get("suggested_options", [])
-            fallback_text = f"🤔 {question}"
-            if options:
-                fallback_text += "\n" + "\n".join(f"  · {o}" for o in options)
-            reply = _send_group_text(message.chat_id, fallback_text)
-        return {"action": "clarification_needed", "intent_result": intent_result, "reply": reply}
-
     # — 路由：query / 最近决策 —
     if "最近" in content and ("决策" in content or "决定" in content):
+        print(f"[飞书-路由] recent_decisions 关键词匹配", flush=True)
         decisions = recent_decisions(5, db)
         items = decisions.get("decisions", [])
         if items and _auto_reply_enabled():
@@ -885,6 +1023,7 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
         return {"action": "recent_decisions", "count": len(items)}
 
     if intent == "query" or (intent is None and (message.mentioned or is_query_message(content))):
+        print(f"[飞书-路由] query → mentioned={message.mentioned} is_query={is_query_message(content)}", flush=True)
         cards = _query_related_cards(content, 3, db)
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
         if cards and _auto_reply_enabled():
@@ -893,6 +1032,7 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
         return {"action": "suggest_cards" if cards else "no_match", "cards": cards, "reply": reply}
 
     # — 路由：chat —
+    print(f"[飞书-路由] chat → 忽略 (intent={intent})", flush=True)
     return {"action": "ignored", "intent": intent or "chat", "reason": "闲聊，无需处理"}
 
 
@@ -916,3 +1056,7 @@ def _extract_user_id(event_data: dict[str, Any]) -> Optional[str]:
     sender = (event_data.get("event") or {}).get("sender") or {}
     sender_id = sender.get("sender_id") or {}
     return sender_id.get("user_id") or sender_id.get("open_id")
+
+
+def _extract_message_id(event_data: dict[str, Any]) -> Optional[str]:
+    return ((event_data.get("event") or {}).get("message") or {}).get("message_id")

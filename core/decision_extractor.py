@@ -101,6 +101,62 @@ def _get_openai_client():
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
+def _extract_json_from_response(raw_text: str) -> dict[str, Any]:
+    """从 LLM 原始响应中健壮提取 JSON 对象。
+
+    处理常见情况：
+    - 纯 JSON: {"key": "value"}
+    - Markdown 代码块: ```json {...} ``` 或 ``` {...} ```
+    - 带前导/尾随文本: Some text {"key": "value"} more text
+    - 模型拒绝输出 JSON 时返回空字典
+    """
+    import re
+
+    if not raw_text or not raw_text.strip():
+        raise ValueError("LLM 返回空响应")
+
+    text = raw_text.strip()
+
+    # 1) 尝试直接解析（最快路径）
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2) 提取 markdown 代码块中的 JSON
+    fenced_patterns = [
+        r'```(?:json)?\s*\n?(.*?)\n?```',  # ```json ... ``` 或 ``` ... ```
+    ]
+    for pat in fenced_patterns:
+        matches = re.findall(pat, text, re.DOTALL)
+        for m in matches:
+            try:
+                return json.loads(m.strip())
+            except json.JSONDecodeError:
+                continue
+
+    # 3) 在文本中找到第一个平衡的 { ... } 块
+    start = text.find('{')
+    if start == -1:
+        raise ValueError(f"响应中未找到 JSON 对象: {text[:200]}")
+
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue  # 继续找下一个 {
+
+    raise ValueError(f"无法从响应中提取有效 JSON: {text[:200]}")
+
+
 def extract_decision_with_llm(message: str, model: Optional[str] = None) -> dict[str, Any]:
     """
     使用LLM从消息中抽取决策信息
@@ -116,7 +172,7 @@ def extract_decision_with_llm(message: str, model: Optional[str] = None) -> dict
         client = _get_openai_client()
         model = model or os.getenv("LLM_MODEL", "gpt-3.5-turbo")
 
-        prompt = DECISION_EXTRACTION_PROMPT.format(message=message)
+        prompt = DECISION_EXTRACTION_PROMPT.replace("{message}", message)
 
         response = client.chat.completions.create(
             model=model,
@@ -129,21 +185,29 @@ def extract_decision_with_llm(message: str, model: Optional[str] = None) -> dict
         )
 
         # 提取响应内容
-        content = response.choices[0].message.content.strip()
+        raw_content = response.choices[0].message.content or ""
+        print(f"[LLM抽取] 原始响应 ({len(raw_content)} 字符): {raw_content[:300]}", flush=True)
 
-        # 解析JSON
-        result = json.loads(content)
+        # 健壮解析 JSON
+        result = _extract_json_from_response(raw_content)
 
-        # 验证和规范化结果
-        return _normalize_result(result)
+        normalized = _normalize_result(result)
+        print(f"[LLM抽取] is_decision={normalized['is_decision']} "
+              f"topic={normalized.get('topic')} "
+              f"confidence={normalized.get('confidence')}", flush=True)
+        return normalized
 
     except json.JSONDecodeError as e:
+        print(f"[LLM抽取] JSON解析失败: {e}", flush=True)
         return {
             "is_decision": False,
             "error": f"JSON解析失败: {str(e)}",
-            "raw_response": content if 'content' in locals() else None
+            "raw_response": raw_content if 'raw_content' in locals() else None
         }
     except Exception as e:
+        print(f"[LLM抽取] 调用异常: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         return {
             "is_decision": False,
             "error": f"LLM调用失败: {str(e)}"
@@ -272,13 +336,15 @@ def classify_message_intent(message: str, model: Optional[str] = None) -> dict[s
 
     Returns:
         {"intent": str, "confidence": float, "reason": str,
-         "clarification_question": str|null, "suggested_options": list}
+         "clarification_question": str|null, "suggested_options": list,
+         "fallback": bool, "fallback_reason": str}
     """
     try:
         client = _get_openai_client()
         model = model or os.getenv("LLM_MODEL", "gpt-3.5-turbo")
+        base = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-        prompt = INTENT_CLASSIFICATION_PROMPT.format(message=message)
+        prompt = INTENT_CLASSIFICATION_PROMPT.replace("{message}", message)
 
         response = client.chat.completions.create(
             model=model,
@@ -290,8 +356,14 @@ def classify_message_intent(message: str, model: Optional[str] = None) -> dict[s
             max_tokens=300,
         )
 
-        content = response.choices[0].message.content.strip()
-        result = json.loads(content)
+        raw_content = response.choices[0].message.content or ""
+        print(f"[LLM分类] 原始响应 ({len(raw_content)} 字符): {raw_content[:300]}", flush=True)
+
+        result = _extract_json_from_response(raw_content)
+
+        print(f"[LLM分类] intent={result.get('intent')} "
+              f"confidence={result.get('confidence')} "
+              f"reason={result.get('reason', '')[:60]}", flush=True)
 
         return {
             "intent": result.get("intent", "chat"),
@@ -299,14 +371,23 @@ def classify_message_intent(message: str, model: Optional[str] = None) -> dict[s
             "reason": result.get("reason", ""),
             "clarification_question": result.get("clarification_question"),
             "suggested_options": result.get("suggested_options", []),
+            "fallback": False,
+            "model": model,
+            "base_url": base,
         }
-    except Exception:
+    except Exception as e:
+        print(f"[LLM分类] 调用失败 ({model or os.getenv('LLM_MODEL', '?')} @ "
+              f"{os.getenv('OPENAI_BASE_URL', '?')}): {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         return {
             "intent": "chat",
             "confidence": 0.0,
-            "reason": "LLM调用失败，默认归类为chat",
+            "reason": f"LLM调用失败，回退规则模式: {str(e)[:80]}",
             "clarification_question": None,
             "suggested_options": [],
+            "fallback": True,
+            "fallback_reason": str(e)[:100],
         }
 
 
