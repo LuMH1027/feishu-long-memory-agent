@@ -226,7 +226,7 @@ def _normalize_result(result: dict[str, Any]) -> dict[str, Any]:
         "preferred_terms": result.get("preferred_terms", []),
         "rejected_terms": result.get("rejected_terms", []),
         "deadline": result.get("deadline"),
-        "confidence": float(result.get("confidence", 0.5))
+        "confidence": float(result.get("confidence") or 0.5)
     }
 
     # 确保列表字段是列表
@@ -361,13 +361,14 @@ def classify_message_intent(message: str, model: Optional[str] = None) -> dict[s
 
         result = _extract_json_from_response(raw_content)
 
+        _reason = result.get('reason') or ''
         print(f"[LLM分类] intent={result.get('intent')} "
               f"confidence={result.get('confidence')} "
-              f"reason={result.get('reason', '')[:60]}", flush=True)
+              f"reason={_reason[:60]}", flush=True)
 
         return {
             "intent": result.get("intent", "chat"),
-            "confidence": float(result.get("confidence", 0.5)),
+            "confidence": float(result.get("confidence") or 0.5),
             "reason": result.get("reason", ""),
             "clarification_question": result.get("clarification_question"),
             "suggested_options": result.get("suggested_options", []),

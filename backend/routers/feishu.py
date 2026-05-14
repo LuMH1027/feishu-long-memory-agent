@@ -397,46 +397,79 @@ def _use_llm_extraction() -> bool:
     return os.getenv("USE_LLM_DECISION_EXTRACTION", "").lower() in {"1", "true", "yes", "on"}
 
 
-def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict[str, Any]:
-    # 尝试使用LLM抽取，失败时降级为规则抽取
-    use_llm = _use_llm_extraction()
-    print(f"[决策入库] 开始: content={request.content[:80]} use_llm={use_llm}", flush=True)
+def _find_existing_decision(chat_id: str, topic: str, db: Session) -> Optional["DecisionMemory"]:
+    """在同一 chat 中查找 topic 最接近的活跃决策"""
+    if not _has_db(db) or not topic:
+        return None
+    candidates = (
+        db.query(DecisionMemory)
+        .join(Memory, DecisionMemory.id == Memory.id)
+        .filter(Memory.team_id == chat_id)
+        .all()
+    )
+    topic_lower = topic.lower()
+    for dm in candidates:
+        stored_lower = (dm.topic or "").lower()
+        if topic_lower in stored_lower or stored_lower in topic_lower:
+            return dm
+        # 关键词重叠 ≥ 50% 视为匹配
+        t1 = set(re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", topic_lower))
+        t2 = set(re.findall(r"[一-鿿]+|[a-zA-Z0-9]+", stored_lower))
+        if t1 and t2 and len(t1 & t2) / min(len(t1), len(t2)) >= 0.5:
+            return dm
+    return None
 
-    if use_llm:
-        try:
-            from core.decision_extractor import extract_decision_with_rules_fallback
-            llm_result = extract_decision_with_rules_fallback(request.content, use_llm=True)
 
-            if llm_result.get("is_decision"):
-                print(f"[决策入库] LLM判定为决策 topic={llm_result.get('topic')} "
-                      f"confidence={llm_result.get('confidence')}", flush=True)
-                # 使用LLM结果
-                decision = {
-                    "topic": llm_result.get("topic", "未知主题"),
-                    "conclusion": llm_result.get("conclusion", request.content),
-                    "reason": llm_result.get("reason"),
-                    "project": llm_result.get("project"),
-                    "preferred_terms": llm_result.get("preferred_terms", []),
-                    "rejected_terms": llm_result.get("rejected_terms", []),
-                    "topic_key": _topic_key(llm_result.get("project"), request.content, request.chat_id),
-                    "llm_confidence": llm_result.get("confidence", 0.0),
-                    "deadline": llm_result.get("deadline"),
-                }
-            else:
-                # LLM判断不是决策
-                print(f"[决策入库] LLM判定非决策 confidence={llm_result.get('confidence')}", flush=True)
-                return {"status": "ignored", "reason": "LLM判断不是决策消息", "confidence": llm_result.get("confidence", 0.0)}
-        except Exception as e:
-            # LLM失败，降级为规则抽取
-            print(f"[决策入库] LLM抽取异常，降级为规则抽取: {e}", flush=True)
+def _process_decision_store(
+    decision: dict, request: DecisionExtractRequest, db: Session,
+    intent: Optional[str], extraction_method: str,
+) -> dict[str, Any]:
+    """处理决策存储/修订/废止的内部逻辑，LLM 和规则抽取共用"""
 
-    # 使用规则抽取
-    print(f"[决策入库] 使用规则抽取", flush=True)
-    decision = extract_decision(request.content, request.chat_id)
+    # — decision_repeal: 废止已有决策 —
+    if intent == "decision_repeal":
+        existing = _find_existing_decision(request.chat_id, decision.get("topic", ""), db)
+        if existing:
+            mem = db.query(Memory).filter(Memory.id == existing.id).first()
+            if mem:
+                meta = json.loads(mem.memory_metadata or "{}")
+                meta["status"] = "repealed"
+                meta["repealed_by"] = request.message_id
+                meta["repealed_at"] = datetime.now().isoformat()
+                mem.memory_metadata = json.dumps(meta, ensure_ascii=False)
+                db.commit()
+            print(f"[决策入库] 已废止决策: topic={existing.topic} id={existing.id}", flush=True)
+            return {"status": "repealed", "decision": decision,
+                    "memory": {"id": existing.id, "topic": existing.topic, "conclusion": existing.conclusion}}
+        print(f"[决策入库] repeal 未找到匹配决策，忽略", flush=True)
+        return {"status": "ignored", "reason": "未找到可废止的决策"}
 
-    print(f"[决策入库] 规则提取结果: topic={decision.get('topic')} "
-          f"conclusion={decision.get('conclusion', '')[:60]}", flush=True)
+    # — decision_revise: 覆盖已有决策 —
+    if intent == "decision_revise":
+        existing = _find_existing_decision(request.chat_id, decision.get("topic", ""), db)
+        if existing:
+            old_conclusion = existing.conclusion
+            existing.conclusion = decision["conclusion"]
+            existing.reason = decision.get("reason") or existing.reason
+            existing.deadline = decision.get("deadline") or existing.deadline
+            mem = db.query(Memory).filter(Memory.id == existing.id).first()
+            if mem:
+                mem.content = decision["conclusion"]
+                mem.updated_at = datetime.now()
+                meta = json.loads(mem.memory_metadata or "{}")
+                meta["status"] = "pending"
+                meta["revised_by"] = request.message_id
+                meta["revised_at"] = datetime.now().isoformat()
+                meta["previous_conclusion"] = old_conclusion
+                mem.memory_metadata = json.dumps(meta, ensure_ascii=False)
+            db.commit()
+            print(f"[决策入库] 已覆盖决策: topic={existing.topic} "
+                  f"旧结论={old_conclusion[:30]} → 新结论={decision['conclusion'][:30]}", flush=True)
+            return {"status": "revised", "decision": decision,
+                    "memory": {"id": existing.id, "topic": existing.topic, "conclusion": decision["conclusion"]}}
+        print(f"[决策入库] revise 未找到匹配决策，按新建处理", flush=True)
 
+    # — decision_new（或 revise 未找到匹配时）: 创建新记录 —
     metadata = {
         **request.metadata,
         **decision,
@@ -444,7 +477,7 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
         "message_id": request.message_id,
         "status": "pending",
         "extracted_at": datetime.now().isoformat(),
-        "extraction_method": "llm" if use_llm and decision.get("llm_confidence") else "rules",
+        "extraction_method": extraction_method,
     }
     stored = memory.store_memory(
         memory.MemoryStoreRequest(
@@ -474,6 +507,48 @@ def _store_decision_record(request: DecisionExtractRequest, db: Session) -> dict
             )
             db.commit()
     return {"status": "stored", "decision": decision, "memory": stored}
+
+
+def _store_decision_record(request: DecisionExtractRequest, db: Session,
+                           intent: Optional[str] = None) -> dict[str, Any]:
+    # 尝试使用LLM抽取，失败时降级为规则抽取
+    use_llm = _use_llm_extraction()
+    print(f"[决策入库] 开始: content={request.content[:80]} use_llm={use_llm} intent={intent}", flush=True)
+
+    if use_llm:
+        try:
+            from core.decision_extractor import extract_decision_with_rules_fallback
+            llm_result = extract_decision_with_rules_fallback(request.content, use_llm=True)
+
+            if llm_result.get("is_decision"):
+                print(f"[决策入库] LLM判定为决策 topic={llm_result.get('topic')} "
+                      f"confidence={llm_result.get('confidence')}", flush=True)
+                decision = {
+                    "topic": llm_result.get("topic", "未知主题"),
+                    "conclusion": llm_result.get("conclusion", request.content),
+                    "reason": llm_result.get("reason"),
+                    "project": llm_result.get("project"),
+                    "preferred_terms": llm_result.get("preferred_terms", []),
+                    "rejected_terms": llm_result.get("rejected_terms", []),
+                    "topic_key": _topic_key(llm_result.get("project"), request.content, request.chat_id),
+                    "llm_confidence": llm_result.get("confidence", 0.0),
+                    "deadline": llm_result.get("deadline"),
+                }
+                return _process_decision_store(decision, request, db, intent, "llm")
+            else:
+                print(f"[决策入库] LLM判定非决策 confidence={llm_result.get('confidence')}", flush=True)
+                return {"status": "ignored", "reason": "LLM判断不是决策消息", "confidence": llm_result.get("confidence", 0.0)}
+        except Exception as e:
+            print(f"[决策入库] LLM抽取异常，降级为规则抽取: {e}", flush=True)
+
+    # 使用规则抽取
+    print(f"[决策入库] 使用规则抽取", flush=True)
+    decision = extract_decision(request.content, request.chat_id)
+
+    print(f"[决策入库] 规则提取结果: topic={decision.get('topic')} "
+          f"conclusion={decision.get('conclusion', '')[:60]}", flush=True)
+
+    return _process_decision_store(decision, request, db, intent, "rules")
 
 
 def _query_related_cards(query: str, limit: int, db: Session) -> list[dict[str, Any]]:
@@ -891,6 +966,7 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 source=message.source,
             ),
             db,
+            intent="decision_new",
         )
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
         if _auto_reply_enabled() and stored.get("status") != "ignored":
@@ -930,9 +1006,10 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 print(f"[飞书] LLM 意图分类失败，回退规则模式: "
                       f"{intent_result.get('fallback_reason', '')[:80]}", flush=True)
             else:
+                _cq = intent_result.get('clarification_question') or ''
                 print(f"[飞书-分类] LLM分类结果: intent={intent} "
                       f"confidence={intent_result.get('confidence')} "
-                      f"clarification_question={intent_result.get('clarification_question', '')[:60]}",
+                      f"clarification_question={_cq[:60]}",
                       flush=True)
         except Exception as e:
             intent = None  # LLM 异常 → 回退规则模式
@@ -993,6 +1070,7 @@ def handle_feishu_message(message: FeishuMessage, db: Session = Depends(get_db))
                 source=message.source,
             ),
             db,
+            intent=intent,
         )
         reply = {"status": "skipped", "reason": "未开启 FEISHU_AUTO_REPLY"}
         if _auto_reply_enabled() and stored.get("status") != "ignored":
